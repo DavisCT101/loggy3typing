@@ -1,0 +1,594 @@
+// Data structures and algorithms demo written in plain C.
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+ 
+#define MAX_NAME 32
+#define TABLE_SIZE 16
+#define N 3
+ 
+// ---------- dynamic array ----------
+typedef struct {
+    int *items;
+    size_t size;
+    size_t capacity;
+} IntArray;
+ 
+static void array_init(IntArray *arr) {
+    arr->items = NULL;
+    arr->size = 0;
+    arr->capacity = 0;
+}
+ 
+static int array_push(IntArray *arr, int value) {
+    if (arr->size == arr->capacity) {
+        size_t new_capacity = arr->capacity == 0 ? 4 : arr->capacity * 2;
+        int *grown = realloc(arr->items, new_capacity * sizeof(int));
+        if (grown == NULL) {
+            return 0;
+        }
+        arr->items = grown;
+        arr->capacity = new_capacity;
+    }
+    arr->items[arr->size++] = value;
+    return 1;
+}
+ 
+static void array_free(IntArray *arr) {
+    free(arr->items);
+    array_init(arr);
+}
+ 
+static void print_ints(const int *items, size_t count, const char *label) {
+    printf("%s: [", label);
+    for (size_t i = 0; i < count; i++) {
+        printf("%d%s", items[i], i + 1 < count ? ", " : "");
+    }
+    printf("]\n");
+}
+ 
+// ---------- sorting and searching ----------
+static void swap_ints(int *a, int *b) {
+    int temp = *a;
+    *a = *b;
+    *b = temp;
+}
+ 
+static void bubble_sort(int *items, size_t n) {
+    for (size_t i = 0; i + 1 < n; i++) {
+        int swapped = 0;
+        for (size_t j = 0; j + 1 < n - i; j++) {
+            if (items[j] > items[j + 1]) {
+                swap_ints(&items[j], &items[j + 1]);
+                swapped = 1;
+            }
+        }
+        if (!swapped) {
+            break;
+        }
+    }
+}
+ 
+static void insertion_sort(int *items, size_t n) {
+    for (size_t i = 1; i < n; i++) {
+        int key = items[i];
+        size_t j = i;
+        while (j > 0 && items[j - 1] > key) {
+            items[j] = items[j - 1];
+            j--;
+        }
+        items[j] = key;
+    }
+}
+ 
+static size_t partition(int *items, size_t low, size_t high) {
+    int pivot = items[high];
+    size_t i = low;
+    for (size_t j = low; j < high; j++) {
+        if (items[j] < pivot) {
+            swap_ints(&items[i], &items[j]);
+            i++;
+        }
+    }
+    swap_ints(&items[i], &items[high]);
+    return i;
+}
+ 
+static void quick_sort(int *items, size_t low, size_t high) {
+    if (low >= high) {
+        return;
+    }
+    size_t p = partition(items, low, high);
+    if (p > low) {
+        quick_sort(items, low, p - 1);
+    }
+    quick_sort(items, p + 1, high);
+}
+ 
+static int binary_search(const int *items, size_t n, int target) {
+    size_t low = 0;
+    size_t high = n;
+    while (low < high) {
+        size_t mid = low + (high - low) / 2;
+        if (items[mid] == target) {
+            return (int)mid;
+        }
+        if (items[mid] < target) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    return -1;
+}
+ 
+// ---------- linked list ----------
+typedef struct Node {
+    int value;
+    struct Node *next;
+} Node;
+ 
+static Node *list_prepend(Node *head, int value) {
+    Node *node = malloc(sizeof(Node));
+    if (node == NULL) {
+        return head;
+    }
+    node->value = value;
+    node->next = head;
+    return node;
+}
+ 
+static Node *list_reverse(Node *head) {
+    Node *prev = NULL;
+    while (head != NULL) {
+        Node *next = head->next;
+        head->next = prev;
+        prev = head;
+        head = next;
+    }
+    return prev;
+}
+ 
+static size_t list_length(const Node *head) {
+    size_t count = 0;
+    while (head != NULL) {
+        count++;
+        head = head->next;
+    }
+    return count;
+}
+ 
+static void list_print(const Node *head) {
+    printf("list:");
+    while (head != NULL) {
+        printf(" %d", head->value);
+        head = head->next;
+    }
+    printf("\n");
+}
+ 
+static void list_free(Node *head) {
+    while (head != NULL) {
+        Node *next = head->next;
+        free(head);
+        head = next;
+    }
+}
+ 
+// ---------- stack and bracket checker ----------
+typedef struct {
+    char data[128];
+    int top;
+} CharStack;
+ 
+static void stack_init(CharStack *stack) {
+    stack->top = -1;
+}
+ 
+static int stack_push(CharStack *stack, char c) {
+    if (stack->top >= 127) {
+        return 0;
+    }
+    stack->data[++stack->top] = c;
+    return 1;
+}
+ 
+static int stack_pop(CharStack *stack, char *out) {
+    if (stack->top < 0) {
+        return 0;
+    }
+    *out = stack->data[stack->top--];
+    return 1;
+}
+ 
+static int is_balanced(const char *text) {
+    CharStack stack;
+    stack_init(&stack);
+    for (const char *p = text; *p != '\0'; p++) {
+        char c = *p;
+        if (c == '(' || c == '[' || c == '{') {
+            if (!stack_push(&stack, c)) {
+                return 0;
+            }
+        } else if (c == ')' || c == ']' || c == '}') {
+            char open;
+            if (!stack_pop(&stack, &open)) {
+                return 0;
+            }
+            if ((c == ')' && open != '(') ||
+                (c == ']' && open != '[') ||
+                (c == '}' && open != '{')) {
+                return 0;
+            }
+        }
+    }
+    return stack.top == -1;
+}
+ 
+// ---------- hash table ----------
+typedef struct Entry {
+    char key[MAX_NAME];
+    int count;
+    struct Entry *next;
+} Entry;
+ 
+typedef struct {
+    Entry *buckets[TABLE_SIZE];
+} HashTable;
+ 
+static unsigned int hash_string(const char *text) {
+    unsigned int hash = 5381;
+    while (*text != '\0') {
+        hash = hash * 33 + (unsigned char)*text;
+        text++;
+    }
+    return hash % TABLE_SIZE;
+}
+ 
+static void table_init(HashTable *table) {
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        table->buckets[i] = NULL;
+    }
+}
+ 
+static void table_increment(HashTable *table, const char *key) {
+    unsigned int index = hash_string(key);
+    for (Entry *e = table->buckets[index]; e != NULL; e = e->next) {
+        if (strcmp(e->key, key) == 0) {
+            e->count++;
+            return;
+        }
+    }
+    Entry *entry = malloc(sizeof(Entry));
+    if (entry == NULL) {
+        return;
+    }
+    strncpy(entry->key, key, MAX_NAME - 1);
+    entry->key[MAX_NAME - 1] = '\0';
+    entry->count = 1;
+    entry->next = table->buckets[index];
+    table->buckets[index] = entry;
+}
+ 
+static int table_get(const HashTable *table, const char *key) {
+    for (const Entry *e = table->buckets[hash_string(key)]; e != NULL; e = e->next) {
+        if (strcmp(e->key, key) == 0) {
+            return e->count;
+        }
+    }
+    return 0;
+}
+ 
+static void table_free(HashTable *table) {
+    for (int i = 0; i < TABLE_SIZE; i++) {
+        Entry *e = table->buckets[i];
+        while (e != NULL) {
+            Entry *next = e->next;
+            free(e);
+            e = next;
+        }
+        table->buckets[i] = NULL;
+    }
+}
+ 
+static void count_words(HashTable *table, const char *text) {
+    char word[MAX_NAME];
+    size_t length = 0;
+    for (const char *p = text; ; p++) {
+        if (isalpha((unsigned char)*p)) {
+            if (length < MAX_NAME - 1) {
+                word[length++] = (char)tolower((unsigned char)*p);
+            }
+        } else {
+            if (length > 0) {
+                word[length] = '\0';
+                table_increment(table, word);
+                length = 0;
+            }
+            if (*p == '\0') {
+                break;
+            }
+        }
+    }
+}
+ 
+// ---------- string helpers ----------
+static void reverse_string(char *text) {
+    size_t length = strlen(text);
+    for (size_t i = 0; i < length / 2; i++) {
+        char temp = text[i];
+        text[i] = text[length - 1 - i];
+        text[length - 1 - i] = temp;
+    }
+}
+ 
+static int is_palindrome(const char *text) {
+    size_t left = 0;
+    size_t right = strlen(text);
+    while (left < right) {
+        while (left < right && !isalnum((unsigned char)text[left])) {
+            left++;
+        }
+        while (left < right && !isalnum((unsigned char)text[right - 1])) {
+            right--;
+        }
+        if (left >= right) {
+            break;
+        }
+        if (tolower((unsigned char)text[left]) != tolower((unsigned char)text[right - 1])) {
+            return 0;
+        }
+        left++;
+        right--;
+    }
+    return 1;
+}
+ 
+static int count_vowels(const char *text) {
+    int total = 0;
+    for (const char *p = text; *p != '\0'; p++) {
+        char c = (char)tolower((unsigned char)*p);
+        if (c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u') {
+            total++;
+        }
+    }
+    return total;
+}
+ 
+// ---------- math helpers ----------
+static unsigned long gcd(unsigned long a, unsigned long b) {
+    while (b != 0) {
+        unsigned long temp = a % b;
+        a = b;
+        b = temp;
+    }
+    return a;
+}
+ 
+static int is_prime(int n) {
+    if (n < 2) {
+        return 0;
+    }
+    for (int i = 2; i * i <= n; i++) {
+        if (n % i == 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+ 
+static unsigned long long fibonacci(int n) {
+    unsigned long long a = 0;
+    unsigned long long b = 1;
+    for (int i = 0; i < n; i++) {
+        unsigned long long next = a + b;
+        a = b;
+        b = next;
+    }
+    return a;
+}
+ 
+static void print_primes(int limit) {
+    printf("primes up to %d:", limit);
+    for (int n = 2; n <= limit; n++) {
+        if (is_prime(n)) {
+            printf(" %d", n);
+        }
+    }
+    printf("\n");
+}
+ 
+// ---------- matrix ----------
+static void matrix_multiply(int a[N][N], int b[N][N], int out[N][N]) {
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            out[i][j] = 0;
+            for (int k = 0; k < N; k++) {
+                out[i][j] += a[i][k] * b[k][j];
+            }
+        }
+    }
+}
+ 
+static void matrix_print(int m[N][N]) {
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            printf("%4d", m[i][j]);
+        }
+        printf("\n");
+    }
+}
+ 
+// ---------- student records ----------
+typedef struct {
+    char name[MAX_NAME];
+    int age;
+    double grade;
+} Student;
+ 
+static int compare_by_grade(const void *left, const void *right) {
+    const Student *a = left;
+    const Student *b = right;
+    if (a->grade < b->grade) {
+        return 1;
+    }
+    if (a->grade > b->grade) {
+        return -1;
+    }
+    return strcmp(a->name, b->name);
+}
+ 
+static double average_grade(const Student *students, size_t count) {
+    double total = 0.0;
+    for (size_t i = 0; i < count; i++) {
+        total += students[i].grade;
+    }
+    return count == 0 ? 0.0 : total / (double)count;
+}
+ 
+static int save_students(const char *path, const Student *students, size_t count) {
+    FILE *file = fopen(path, "w");
+    if (file == NULL) {
+        return 0;
+    }
+    for (size_t i = 0; i < count; i++) {
+        fprintf(file, "%s,%d,%.1f\n", students[i].name, students[i].age, students[i].grade);
+    }
+    fclose(file);
+    return 1;
+}
+ 
+// ---------- demos ----------
+static void demo_sorting(void) {
+    printf("\n== sorting and searching ==\n");
+    int values[] = {42, 7, 19, 3, 88, 23, 56, 1, 64, 11};
+    size_t count = sizeof(values) / sizeof(values[0]);
+    IntArray arr;
+    array_init(&arr);
+    for (size_t i = 0; i < count; i++) {
+        array_push(&arr, values[i]);
+    }
+    print_ints(arr.items, arr.size, "original ");
+    int copy_a[10];
+    int copy_b[10];
+    memcpy(copy_a, values, sizeof(values));
+    memcpy(copy_b, values, sizeof(values));
+    bubble_sort(arr.items, arr.size);
+    insertion_sort(copy_a, count);
+    quick_sort(copy_b, 0, count - 1);
+    print_ints(arr.items, arr.size, "bubble   ");
+    print_ints(copy_a, count, "insertion");
+    print_ints(copy_b, count, "quick    ");
+    int targets[] = {23, 5};
+    for (size_t i = 0; i < 2; i++) {
+        int position = binary_search(arr.items, arr.size, targets[i]);
+        if (position >= 0) {
+            printf("found %d at index %d\n", targets[i], position);
+        } else {
+            printf("%d is not in the array\n", targets[i]);
+        }
+    }
+    array_free(&arr);
+}
+ 
+static void demo_list(void) {
+    printf("\n== linked list ==\n");
+    Node *head = NULL;
+    for (int i = 1; i <= 6; i++) {
+        head = list_prepend(head, i * i);
+    }
+    list_print(head);
+    head = list_reverse(head);
+    list_print(head);
+    printf("length: %zu\n", list_length(head));
+    list_free(head);
+}
+ 
+static void demo_stack(void) {
+    printf("\n== bracket checker ==\n");
+    const char *samples[] = {
+        "int main() { return (1 + 2) * [3]; }",
+        "if (a[0] { b(); }",
+        "}{",
+    };
+    for (size_t i = 0; i < 3; i++) {
+        printf("%-40s -> %s\n", samples[i], is_balanced(samples[i]) ? "balanced" : "NOT balanced");
+    }
+}
+ 
+static void demo_words(void) {
+    printf("\n== word counts ==\n");
+    const char *text = "the quick brown fox jumps over the lazy dog and the fox runs";
+    HashTable table;
+    table_init(&table);
+    count_words(&table, text);
+    const char *queries[] = {"the", "fox", "dog", "cat"};
+    for (size_t i = 0; i < 4; i++) {
+        printf("%-5s appears %d time(s)\n", queries[i], table_get(&table, queries[i]));
+    }
+    table_free(&table);
+}
+ 
+static void demo_strings(void) {
+    printf("\n== string helpers ==\n");
+    char word[] = "programming";
+    printf("vowels in %s: %d\n", word, count_vowels(word));
+    reverse_string(word);
+    printf("reversed: %s\n", word);
+    const char *phrases[] = {"A man, a plan, a canal: Panama", "Hello, world"};
+    for (size_t i = 0; i < 2; i++) {
+        printf("\"%s\" is %sa palindrome\n", phrases[i], is_palindrome(phrases[i]) ? "" : "not ");
+    }
+}
+ 
+static void demo_math(void) {
+    printf("\n== math helpers ==\n");
+    printf("gcd(84, 36) = %lu\n", gcd(84, 36));
+    printf("fibonacci(40) = %llu\n", fibonacci(40));
+    print_primes(50);
+}
+ 
+static void demo_matrix(void) {
+    printf("\n== matrix multiply ==\n");
+    int a[N][N] = {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}};
+    int b[N][N] = {{9, 8, 7}, {6, 5, 4}, {3, 2, 1}};
+    int result[N][N];
+    matrix_multiply(a, b, result);
+    matrix_print(result);
+}
+ 
+static void demo_students(void) {
+    printf("\n== student records ==\n");
+    Student roster[] = {
+        {"Amina", 20, 88.5},
+        {"Brian", 22, 76.0},
+        {"Chloe", 21, 92.3},
+        {"Daniel", 19, 76.0},
+        {"Esther", 23, 81.7},
+    };
+    size_t count = sizeof(roster) / sizeof(roster[0]);
+    qsort(roster, count, sizeof(Student), compare_by_grade);
+    for (size_t i = 0; i < count; i++) {
+        printf("%zu. %-8s age %d grade %.1f\n", i + 1, roster[i].name, roster[i].age, roster[i].grade);
+    }
+    printf("average grade: %.2f\n", average_grade(roster, count));
+    if (save_students("students.csv", roster, count)) {
+        printf("saved students.csv\n");
+    } else {
+        printf("could not write students.csv\n");
+    }
+}
+ 
+int main(void) {
+    demo_sorting();
+    demo_list();
+    demo_stack();
+    demo_words();
+    demo_strings();
+    demo_math();
+    demo_matrix();
+    demo_students();
+    printf("\nAll demos finished.\n");
+    return 0;
+}
