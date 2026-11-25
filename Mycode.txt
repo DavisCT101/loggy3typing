@@ -1,594 +1,2202 @@
-// Data structures and algorithms demo written in plain C.
+/*
+ * hospital_management.c
+ * Console-based Hospital Management System in C (C11 standard)
+ *
+ * Features:
+ *  - Patient admission, updates, discharge, search, and sorting
+ *  - Doctor directory, specialization lookup, and availability tracking
+ *  - Appointment scheduling, completion, cancellation, and doctor/patient views
+ *  - Ward bed allocation and release
+ *  - Itemized billing generation, payment recording, and revenue summaries
+ *  - Persistent storage using binary data files with backup/export support
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
- 
-#define MAX_NAME 32
-#define TABLE_SIZE 16
-#define N 3
- 
-// ---------- dynamic array ----------
+#include <time.h>
+
+#define MAX_NAME_LEN        80
+#define MAX_PHONE_LEN       24
+#define MAX_ADDR_LEN        128
+#define MAX_DIAG_LEN        160
+#define MAX_SPEC_LEN        64
+#define MAX_DATE_LEN        16      /* YYYY-MM-DD */
+#define MAX_TIME_LEN        10      /* HH:MM */
+#define MAX_NOTES_LEN       160
+#define MAX_WARD_NAME_LEN   48
+
+#define FILE_PATIENTS       "hms_patients.dat"
+#define FILE_DOCTORS        "hms_doctors.dat"
+#define FILE_APPOINTMENTS   "hms_appointments.dat"
+#define FILE_BILLS          "hms_bills.dat"
+#define FILE_WARDS          "hms_wards.dat"
+#define FILE_REPORT_TXT     "hms_summary_report.txt"
+
+typedef enum {
+    PATIENT_OUTPATIENT = 1,
+    PATIENT_INPATIENT  = 2,
+    PATIENT_DISCHARGED = 3
+} PatientStatus;
+
+typedef enum {
+    APPT_SCHEDULED = 1,
+    APPT_COMPLETED = 2,
+    APPT_CANCELLED = 3
+} AppointmentStatus;
+
 typedef struct {
-    int *items;
-    size_t size;
+    int id;
+    char full_name[MAX_NAME_LEN];
+    int age;
+    char gender;            /* 'M', 'F', 'O' */
+    char blood_group[8];    /* e.g., "O+", "A-" */
+    char phone[MAX_PHONE_LEN];
+    char address[MAX_ADDR_LEN];
+    char diagnosis[MAX_DIAG_LEN];
+    char admission_date[MAX_DATE_LEN];
+    int assigned_doctor_id;
+    int assigned_ward_id;   /* -1 if none */
+    PatientStatus status;
+    int active;
+} Patient;
+
+typedef struct {
+    int id;
+    char full_name[MAX_NAME_LEN];
+    char specialization[MAX_SPEC_LEN];
+    char phone[MAX_PHONE_LEN];
+    double consultation_fee;
+    int available;          /* 1 = available, 0 = unavailable/on-leave */
+    int active;
+} Doctor;
+
+typedef struct {
+    int id;
+    int patient_id;
+    int doctor_id;
+    char date[MAX_DATE_LEN];
+    char time_slot[MAX_TIME_LEN];
+    char reason[MAX_NOTES_LEN];
+    AppointmentStatus status;
+    int active;
+} Appointment;
+
+typedef struct {
+    int id;
+    int ward_id;
+    char ward_name[MAX_WARD_NAME_LEN];
+    int total_beds;
+    int occupied_beds;
+    double daily_rate;
+    int active;
+} Ward;
+
+typedef struct {
+    int id;
+    int patient_id;
+    char billing_date[MAX_DATE_LEN];
+    double consultation_charge;
+    double room_charge;
+    double medication_charge;
+    double lab_charge;
+    double discount_amount;
+    double total_amount;
+    double amount_paid;
+    int is_settled;         /* 1 = paid in full, 0 = balance due */
+    int active;
+} Bill;
+
+typedef struct {
+    Patient *items;
+    size_t count;
     size_t capacity;
-} IntArray;
- 
-static void array_init(IntArray *arr) {
-    arr->items = NULL;
-    arr->size = 0;
-    arr->capacity = 0;
-}
- 
-static int array_push(IntArray *arr, int value) {
-    if (arr->size == arr->capacity) {
-        size_t new_capacity = arr->capacity == 0 ? 4 : arr->capacity * 2;
-        int *grown = realloc(arr->items, new_capacity * sizeof(int));
-        if (grown == NULL) {
-            return 0;
-        }
-        arr->items = grown;
-        arr->capacity = new_capacity;
-    }
-    arr->items[arr->size++] = value;
-    return 1;
-}
- 
-static void array_free(IntArray *arr) {
-    free(arr->items);
-    array_init(arr);
-}
- 
-static void print_ints(const int *items, size_t count, const char *label) {
-    printf("%s: [", label);
-    for (size_t i = 0; i < count; i++) {
-        printf("%d%s", items[i], i + 1 < count ? ", " : "");
-    }
-    printf("]\n");
-}
- 
-// ---------- sorting and searching ----------
-static void swap_ints(int *a, int *b) {
-    int temp = *a;
-    *a = *b;
-    *b = temp;
-}
- 
-static void bubble_sort(int *items, size_t n) {
-    for (size_t i = 0; i + 1 < n; i++) {
-        int swapped = 0;
-        for (size_t j = 0; j + 1 < n - i; j++) {
-            if (items[j] > items[j + 1]) {
-                swap_ints(&items[j], &items[j + 1]);
-                swapped = 1;
-            }
-        }
-        if (!swapped) {
-            break;
-        }
-    }
-}
- 
-static void insertion_sort(int *items, size_t n) {
-    for (size_t i = 1; i < n; i++) {
-        int key = items[i];
-        size_t j = i;
-        while (j > 0 && items[j - 1] > key) {
-            items[j] = items[j - 1];
-            j--;
-        }
-        items[j] = key;
-    }
-}
- 
-static size_t partition(int *items, size_t low, size_t high) {
-    int pivot = items[high];
-    size_t i = low;
-    for (size_t j = low; j < high; j++) {
-        if (items[j] < pivot) {
-            swap_ints(&items[i], &items[j]);
-            i++;
-        }
-    }
-    swap_ints(&items[i], &items[high]);
-    return i;
-}
- 
-static void quick_sort(int *items, size_t low, size_t high) {
-    if (low >= high) {
-        return;
-    }
-    size_t p = partition(items, low, high);
-    if (p > low) {
-        quick_sort(items, low, p - 1);
-    }
-    quick_sort(items, p + 1, high);
-}
- 
-static int binary_search(const int *items, size_t n, int target) {
-    size_t low = 0;
-    size_t high = n;
-    while (low < high) {
-        size_t mid = low + (high - low) / 2;
-        if (items[mid] == target) {
-            return (int)mid;
-        }
-        if (items[mid] < target) {
-            low = mid + 1;
-        } else {
-            high = mid;
-        }
-    }
-    return -1;
-}
- 
-// ---------- linked list ----------
-typedef struct Node {
-    int value;
-    struct Node *next;
-} Node;
- 
-static Node *list_prepend(Node *head, int value) {
-    Node *node = malloc(sizeof(Node));
-    if (node == NULL) {
-        return head;
-    }
-    node->value = value;
-    node->next = head;
-    return node;
-}
- 
-static Node *list_reverse(Node *head) {
-    Node *prev = NULL;
-    while (head != NULL) {
-        Node *next = head->next;
-        head->next = prev;
-        prev = head;
-        head = next;
-    }
-    return prev;
-}
- 
-static size_t list_length(const Node *head) {
-    size_t count = 0;
-    while (head != NULL) {
-        count++;
-        head = head->next;
-    }
-    return count;
-}
- 
-static void list_print(const Node *head) {
-    printf("list:");
-    while (head != NULL) {
-        printf(" %d", head->value);
-        head = head->next;
-    }
-    printf("\n");
-}
- 
-static void list_free(Node *head) {
-    while (head != NULL) {
-        Node *next = head->next;
-        free(head);
-        head = next;
-    }
-}
- 
-// ---------- stack and bracket checker ----------
+    int next_id;
+} PatientList;
+
 typedef struct {
-    char data[128];
-    int top;
-} CharStack;
- 
-static void stack_init(CharStack *stack) {
-    stack->top = -1;
-}
- 
-static int stack_push(CharStack *stack, char c) {
-    if (stack->top >= 127) {
-        return 0;
-    }
-    stack->data[++stack->top] = c;
-    return 1;
-}
- 
-static int stack_pop(CharStack *stack, char *out) {
-    if (stack->top < 0) {
-        return 0;
-    }
-    *out = stack->data[stack->top--];
-    return 1;
-}
- 
-static int is_balanced(const char *text) {
-    CharStack stack;
-    stack_init(&stack);
-    for (const char *p = text; *p != '\0'; p++) {
-        char c = *p;
-        if (c == '(' || c == '[' || c == '{') {
-            if (!stack_push(&stack, c)) {
-                return 0;
-            }
-        } else if (c == ')' || c == ']' || c == '}') {
-            char open;
-            if (!stack_pop(&stack, &open)) {
-                return 0;
-            }
-            if ((c == ')' && open != '(') ||
-                (c == ']' && open != '[') ||
-                (c == '}' && open != '{')) {
-                return 0;
-            }
-        }
-    }
-    return stack.top == -1;
-}
- 
-// ---------- hash table ----------
-typedef struct Entry {
-    char key[MAX_NAME];
-    int count;
-    struct Entry *next;
-} Entry;
- 
+    Doctor *items;
+    size_t count;
+    size_t capacity;
+    int next_id;
+} DoctorList;
+
 typedef struct {
-    Entry *buckets[TABLE_SIZE];
-} HashTable;
- 
-static unsigned int hash_string(const char *text) {
-    unsigned int hash = 5381;
-    while (*text != '\0') {
-        hash = hash * 33 + (unsigned char)*text;
-        text++;
+    Appointment *items;
+    size_t count;
+    size_t capacity;
+    int next_id;
+} AppointmentList;
+
+typedef struct {
+    Ward *items;
+    size_t count;
+    size_t capacity;
+    int next_id;
+} WardList;
+
+typedef struct {
+    Bill *items;
+    size_t count;
+    size_t capacity;
+    int next_id;
+} BillList;
+
+/* Function Prototypes - Utility & Input */
+static void clear_stdin(void);
+static void trim_newline(char *str);
+static void trim_whitespace(char *str);
+static int read_line(const char *prompt, char *buffer, size_t size);
+static int read_int_range(const char *prompt, int min_val, int max_val, int *out_val);
+static int read_double_min(const char *prompt, double min_val, double *out_val);
+static int read_char_choice(const char *prompt, const char *valid_chars, char *out_ch);
+static int is_valid_date(const char *date_str);
+static void get_current_date(char *buffer, size_t size);
+static void to_lower_copy(const char *src, char *dst, size_t dst_size);
+static int contains_case_insensitive(const char *haystack, const char *needle);
+static void print_separator(char ch, int length);
+static void print_header(const char *title);
+static void pause_for_enter(void);
+
+/* Function Prototypes - List Management */
+static void init_patient_list(PatientList *list);
+static void free_patient_list(PatientList *list);
+static int ensure_patient_capacity(PatientList *list);
+
+static void init_doctor_list(DoctorList *list);
+static void free_doctor_list(DoctorList *list);
+static int ensure_doctor_capacity(DoctorList *list);
+
+static void init_appointment_list(AppointmentList *list);
+static void free_appointment_list(AppointmentList *list);
+static int ensure_appointment_capacity(AppointmentList *list);
+
+static void init_ward_list(WardList *list);
+static void free_ward_list(WardList *list);
+static int ensure_ward_capacity(WardList *list);
+
+static void init_bill_list(BillList *list);
+static void free_bill_list(BillList *list);
+static int ensure_bill_capacity(BillList *list);
+
+/* Function Prototypes - Lookup & Status Helpers */
+static const char *patient_status_str(PatientStatus status);
+static const char *appointment_status_str(AppointmentStatus status);
+static Patient *find_patient_by_id(PatientList *list, int id);
+static Doctor *find_doctor_by_id(DoctorList *list, int id);
+static Appointment *find_appointment_by_id(AppointmentList *list, int id);
+static Ward *find_ward_by_id(WardList *list, int id);
+static Bill *find_bill_by_id(BillList *list, int id);
+
+/* Function Prototypes - Seed & Persistence */
+static void seed_default_data(PatientList *pl, DoctorList *dl, AppointmentList *al, WardList *wl, BillList *bl);
+static void save_all_data(const PatientList *pl, const DoctorList *dl, const AppointmentList *al, const WardList *wl, const BillList *bl);
+static void load_all_data(PatientList *pl, DoctorList *dl, AppointmentList *al, WardList *wl, BillList *bl);
+static int save_patients(const PatientList *list, const char *filename);
+static int load_patients(PatientList *list, const char *filename);
+static int save_doctors(const DoctorList *list, const char *filename);
+static int load_doctors(DoctorList *list, const char *filename);
+static int save_appointments(const AppointmentList *list, const char *filename);
+static int load_appointments(AppointmentList *list, const char *filename);
+static int save_wards(const WardList *list, const char *filename);
+static int load_wards(WardList *list, const char *filename);
+static int save_bills(const BillList *list, const char *filename);
+static int load_bills(BillList *list, const char *filename);
+
+/* Function Prototypes - Patient Operations */
+static void patient_menu(PatientList *pl, DoctorList *dl, WardList *wl);
+static void admit_patient(PatientList *pl, DoctorList *dl, WardList *wl);
+static void list_patients(const PatientList *pl, const DoctorList *dl, const WardList *wl);
+static void search_patients(const PatientList *pl, const DoctorList *dl);
+static void update_patient_record(PatientList *pl, DoctorList *dl, WardList *wl);
+static void discharge_patient(PatientList *pl, WardList *wl);
+static void sort_patients_by_name(PatientList *pl);
+static void sort_patients_by_id(PatientList *pl);
+static void print_patient_row(const Patient *p, const DoctorList *dl, const WardList *wl);
+
+/* Function Prototypes - Doctor Operations */
+static void doctor_menu(DoctorList *dl, const AppointmentList *al);
+static void add_doctor(DoctorList *dl);
+static void list_doctors(const DoctorList *dl, const AppointmentList *al);
+static void search_doctors_by_spec(const DoctorList *dl);
+static void toggle_doctor_availability(DoctorList *dl);
+static void update_doctor_fee(DoctorList *dl);
+static int count_doctor_appointments(const AppointmentList *al, int doctor_id);
+
+/* Function Prototypes - Appointment Operations */
+static void appointment_menu(AppointmentList *al, PatientList *pl, DoctorList *dl);
+static void schedule_appointment(AppointmentList *al, PatientList *pl, DoctorList *dl);
+static void list_appointments(const AppointmentList *al, const PatientList *pl, const DoctorList *dl);
+static void update_appointment_status(AppointmentList *al);
+static void view_appointments_by_doctor(const AppointmentList *al, const PatientList *pl, DoctorList *dl);
+
+/* Function Prototypes - Ward Operations */
+static void ward_menu(WardList *wl, PatientList *pl);
+static void add_ward(WardList *wl);
+static void list_wards(const WardList *wl);
+static void assign_bed_to_patient(WardList *wl, PatientList *pl);
+static void release_patient_bed(WardList *wl, PatientList *pl);
+
+/* Function Prototypes - Billing Operations */
+static void billing_menu(BillList *bl, PatientList *pl, DoctorList *dl, WardList *wl);
+static void create_bill(BillList *bl, PatientList *pl, DoctorList *dl, WardList *wl);
+static void list_bills(const BillList *bl, const PatientList *pl);
+static void record_bill_payment(BillList *bl, const PatientList *pl);
+static void view_unsettled_bills(const BillList *bl, const PatientList *pl);
+
+/* Function Prototypes - Reports & Analytics */
+static void reports_menu(const PatientList *pl, const DoctorList *dl, const AppointmentList *al, const WardList *wl, const BillList *bl);
+static void print_hospital_dashboard(const PatientList *pl, const DoctorList *dl, const AppointmentList *al, const WardList *wl, const BillList *bl);
+static void export_summary_report(const PatientList *pl, const DoctorList *dl, const AppointmentList *al, const WardList *wl, const BillList *bl, const char *filename);
+
+/* =========================================================================
+ * MAIN ENTRY POINT
+ * ========================================================================= */
+
+int main(void) {
+    PatientList patients;
+    DoctorList doctors;
+    AppointmentList appointments;
+    WardList wards;
+    BillList bills;
+    int choice = 0;
+
+    init_patient_list(&patients);
+    init_doctor_list(&doctors);
+    init_appointment_list(&appointments);
+    init_ward_list(&wards);
+    init_bill_list(&bills);
+
+    load_all_data(&patients, &doctors, &appointments, &wards, &bills);
+
+    if (patients.count == 0 && doctors.count == 0 && wards.count == 0) {
+        seed_default_data(&patients, &doctors, &appointments, &wards, &bills);
+        save_all_data(&patients, &doctors, &appointments, &wards, &bills);
+        printf("[Info] Initialized default hospital records.\n");
     }
-    return hash % TABLE_SIZE;
-}
- 
-static void table_init(HashTable *table) {
-    for (int i = 0; i < TABLE_SIZE; i++) {
-        table->buckets[i] = NULL;
-    }
-}
- 
-static void table_increment(HashTable *table, const char *key) {
-    unsigned int index = hash_string(key);
-    for (Entry *e = table->buckets[index]; e != NULL; e = e->next) {
-        if (strcmp(e->key, key) == 0) {
-            e->count++;
-            return;
+
+    do {
+        print_header("HOSPITAL MANAGEMENT SYSTEM");
+        printf("  1. Patient Management\n");
+        printf("  2. Doctor Management\n");
+        printf("  3. Appointment Scheduling\n");
+        printf("  4. Ward & Bed Management\n");
+        printf("  5. Billing & Payments\n");
+        printf("  6. Reports & Analytics\n");
+        printf("  7. Save All Records Now\n");
+        printf("  0. Save & Exit\n");
+        print_separator('-', 52);
+
+        if (!read_int_range("Select an option: ", 0, 7, &choice)) {
+            printf("[Error] Invalid input. Enter a number from 0 to 7.\n");
+            continue;
         }
-    }
-    Entry *entry = malloc(sizeof(Entry));
-    if (entry == NULL) {
-        return;
-    }
-    strncpy(entry->key, key, MAX_NAME - 1);
-    entry->key[MAX_NAME - 1] = '\0';
-    entry->count = 1;
-    entry->next = table->buckets[index];
-    table->buckets[index] = entry;
-}
- 
-static int table_get(const HashTable *table, const char *key) {
-    for (const Entry *e = table->buckets[hash_string(key)]; e != NULL; e = e->next) {
-        if (strcmp(e->key, key) == 0) {
-            return e->count;
+
+        switch (choice) {
+            case 1:
+                patient_menu(&patients, &doctors, &wards);
+                break;
+            case 2:
+                doctor_menu(&doctors, &appointments);
+                break;
+            case 3:
+                appointment_menu(&appointments, &patients, &doctors);
+                break;
+            case 4:
+                ward_menu(&wards, &patients);
+                break;
+            case 5:
+                billing_menu(&bills, &patients, &doctors, &wards);
+                break;
+            case 6:
+                reports_menu(&patients, &doctors, &appointments, &wards, &bills);
+                break;
+            case 7:
+                save_all_data(&patients, &doctors, &appointments, &wards, &bills);
+                printf("[Success] All records saved to disk.\n");
+                pause_for_enter();
+                break;
+            case 0:
+                save_all_data(&patients, &doctors, &appointments, &wards, &bills);
+                printf("[Success] Data saved. Exiting system.\n");
+                break;
+            default:
+                break;
         }
-    }
+    } while (choice != 0);
+
+    free_patient_list(&patients);
+    free_doctor_list(&doctors);
+    free_appointment_list(&appointments);
+    free_ward_list(&wards);
+    free_bill_list(&bills);
+
     return 0;
 }
- 
-static void table_free(HashTable *table) {
-    for (int i = 0; i < TABLE_SIZE; i++) {
-        Entry *e = table->buckets[i];
-        while (e != NULL) {
-            Entry *next = e->next;
-            free(e);
-            e = next;
-        }
-        table->buckets[i] = NULL;
+
+/* =========================================================================
+ * INPUT & FORMATTING UTILITIES
+ * ========================================================================= */
+
+static void clear_stdin(void) {
+    int ch;
+    while ((ch = getchar()) != '\n' && ch != EOF) {
+        /* discard remaining characters */
     }
 }
- 
-static void count_words(HashTable *table, const char *text) {
-    char word[MAX_NAME];
-    size_t length = 0;
-    for (const char *p = text; ; p++) {
-        if (isalpha((unsigned char)*p)) {
-            if (length < MAX_NAME - 1) {
-                word[length++] = (char)tolower((unsigned char)*p);
+
+static void trim_newline(char *str) {
+    size_t len;
+    if (!str) return;
+    len = strlen(str);
+    while (len > 0 && (str[len - 1] == '\n' || str[len - 1] == '\r')) {
+        str[--len] = '\0';
+    }
+}
+
+static void trim_whitespace(char *str) {
+    size_t start = 0;
+    size_t len;
+    if (!str) return;
+    len = strlen(str);
+    while (start < len && isspace((unsigned char)str[start])) {
+        start++;
+    }
+    if (start > 0) {
+        memmove(str, str + start, len - start + 1);
+        len -= start;
+    }
+    while (len > 0 && isspace((unsigned char)str[len - 1])) {
+        str[--len] = '\0';
+    }
+}
+
+static int read_line(const char *prompt, char *buffer, size_t size) {
+    if (!buffer || size == 0) return 0;
+    if (prompt) {
+        printf("%s", prompt);
+        fflush(stdout);
+    }
+    if (!fgets(buffer, (int)size, stdin)) {
+        clearerr(stdin);
+        buffer[0] = '\0';
+        return 0;
+    }
+    if (!strchr(buffer, '\n')) {
+        clear_stdin();
+    }
+    trim_newline(buffer);
+    trim_whitespace(buffer);
+    return 1;
+}
+
+static int read_int_range(const char *prompt, int min_val, int max_val, int *out_val) {
+    char line[64];
+    char *endptr = NULL;
+    long val;
+
+    if (!read_line(prompt, line, sizeof(line)) || line[0] == '\0') {
+        return 0;
+    }
+    val = strtol(line, &endptr, 10);
+    if (endptr == line || *endptr != '\0') {
+        return 0;
+    }
+    if (val < (long)min_val || val > (long)max_val) {
+        return 0;
+    }
+    *out_val = (int)val;
+    return 1;
+}
+
+static int read_double_min(const char *prompt, double min_val, double *out_val) {
+    char line[64];
+    char *endptr = NULL;
+    double val;
+
+    if (!read_line(prompt, line, sizeof(line)) || line[0] == '\0') {
+        return 0;
+    }
+    val = strtod(line, &endptr);
+    if (endptr == line || *endptr != '\0') {
+        return 0;
+    }
+    if (val < min_val) {
+        return 0;
+    }
+    *out_val = val;
+    return 1;
+}
+
+static int read_char_choice(const char *prompt, const char *valid_chars, char *out_ch) {
+    char line[16];
+    char ch;
+    if (!read_line(prompt, line, sizeof(line)) || line[0] == '\0') {
+        return 0;
+    }
+    ch = (char)toupper((unsigned char)line[0]);
+    if (strchr(valid_chars, ch) == NULL) {
+        return 0;
+    }
+    *out_ch = ch;
+    return 1;
+}
+
+static int is_leap_year(int year) {
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+static int is_valid_date(const char *date_str) {
+    int year, month, day;
+    int days_in_month[] = {0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+    if (!date_str || strlen(date_str) != 10) return 0;
+    if (date_str[4] != '-' || date_str[7] != '-') return 0;
+    for (int i = 0; i < 10; i++) {
+        if (i == 4 || i == 7) continue;
+        if (!isdigit((unsigned char)date_str[i])) return 0;
+    }
+    if (sscanf(date_str, "%4d-%2d-%2d", &year, &month, &day) != 3) return 0;
+    if (year < 1900 || year > 2100) return 0;
+    if (month < 1 || month > 12) return 0;
+    if (month == 2 && is_leap_year(year)) {
+        days_in_month[2] = 29;
+    }
+    if (day < 1 || day > days_in_month[month]) return 0;
+    return 1;
+}
+
+static void get_current_date(char *buffer, size_t size) {
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    if (!buffer || size == 0) return;
+    if (tm_info) {
+        strftime(buffer, size, "%Y-%m-%d", tm_info);
+    } else {
+        snprintf(buffer, size, "2026-01-01");
+    }
+}
+
+static void to_lower_copy(const char *src, char *dst, size_t dst_size) {
+    size_t i = 0;
+    if (!dst || dst_size == 0) return;
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
+    while (src[i] != '\0' && i + 1 < dst_size) {
+        dst[i] = (char)tolower((unsigned char)src[i]);
+        i++;
+    }
+    dst[i] = '\0';
+}
+
+static int contains_case_insensitive(const char *haystack, const char *needle) {
+    char h_low[256];
+    char n_low[256];
+    if (!haystack || !needle) return 0;
+    if (needle[0] == '\0') return 1;
+    to_lower_copy(haystack, h_low, sizeof(h_low));
+    to_lower_copy(needle, n_low, sizeof(n_low));
+    return strstr(h_low, n_low) != NULL;
+}
+
+static void print_separator(char ch, int length) {
+    for (int i = 0; i < length; i++) {
+        putchar(ch);
+    }
+    putchar('\n');
+}
+
+static void print_header(const char *title) {
+    putchar('\n');
+    print_separator('=', 52);
+    printf("  %s\n", title);
+    print_separator('=', 52);
+}
+
+static void pause_for_enter(void) {
+    char buf[8];
+    read_line("\nPress Enter to continue...", buf, sizeof(buf));
+}
+
+/* =========================================================================
+ * DYNAMIC LIST INITIALIZATION & MEMORY MANAGEMENT
+ * ========================================================================= */
+
+static void init_patient_list(PatientList *list) {
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+    list->next_id = 1001;
+}
+
+static void free_patient_list(PatientList *list) {
+    free(list->items);
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+}
+
+static int ensure_patient_capacity(PatientList *list) {
+    size_t new_cap;
+    Patient *new_arr;
+    if (list->count < list->capacity) return 1;
+    new_cap = (list->capacity == 0) ? 16 : list->capacity * 2;
+    new_arr = (Patient *)realloc(list->items, new_cap * sizeof(Patient));
+    if (!new_arr) return 0;
+    list->items = new_arr;
+    list->capacity = new_cap;
+    return 1;
+}
+
+static void init_doctor_list(DoctorList *list) {
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+    list->next_id = 201;
+}
+
+static void free_doctor_list(DoctorList *list) {
+    free(list->items);
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+}
+
+static int ensure_doctor_capacity(DoctorList *list) {
+    size_t new_cap;
+    Doctor *new_arr;
+    if (list->count < list->capacity) return 1;
+    new_cap = (list->capacity == 0) ? 12 : list->capacity * 2;
+    new_arr = (Doctor *)realloc(list->items, new_cap * sizeof(Doctor));
+    if (!new_arr) return 0;
+    list->items = new_arr;
+    list->capacity = new_cap;
+    return 1;
+}
+
+static void init_appointment_list(AppointmentList *list) {
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+    list->next_id = 5001;
+}
+
+static void free_appointment_list(AppointmentList *list) {
+    free(list->items);
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+}
+
+static int ensure_appointment_capacity(AppointmentList *list) {
+    size_t new_cap;
+    Appointment *new_arr;
+    if (list->count < list->capacity) return 1;
+    new_cap = (list->capacity == 0) ? 20 : list->capacity * 2;
+    new_arr = (Appointment *)realloc(list->items, new_cap * sizeof(Appointment));
+    if (!new_arr) return 0;
+    list->items = new_arr;
+    list->capacity = new_cap;
+    return 1;
+}
+
+static void init_ward_list(WardList *list) {
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+    list->next_id = 10;
+}
+
+static void free_ward_list(WardList *list) {
+    free(list->items);
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+}
+
+static int ensure_ward_capacity(WardList *list) {
+    size_t new_cap;
+    Ward *new_arr;
+    if (list->count < list->capacity) return 1;
+    new_cap = (list->capacity == 0) ? 8 : list->capacity * 2;
+    new_arr = (Ward *)realloc(list->items, new_cap * sizeof(Ward));
+    if (!new_arr) return 0;
+    list->items = new_arr;
+    list->capacity = new_cap;
+    return 1;
+}
+
+static void init_bill_list(BillList *list) {
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+    list->next_id = 9001;
+}
+
+static void free_bill_list(BillList *list) {
+    free(list->items);
+    list->items = NULL;
+    list->count = 0;
+    list->capacity = 0;
+}
+
+static int ensure_bill_capacity(BillList *list) {
+    size_t new_cap;
+    Bill *new_arr;
+    if (list->count < list->capacity) return 1;
+    new_cap = (list->capacity == 0) ? 16 : list->capacity * 2;
+    new_arr = (Bill *)realloc(list->items, new_cap * sizeof(Bill));
+    if (!new_arr) return 0;
+    list->items = new_arr;
+    list->capacity = new_cap;
+    return 1;
+}
+
+/* =========================================================================
+ * LOOKUP & STATUS HELPERS
+ * ========================================================================= */
+
+static const char *patient_status_str(PatientStatus status) {
+    switch (status) {
+        case PATIENT_OUTPATIENT: return "Outpatient";
+        case PATIENT_INPATIENT:  return "Inpatient";
+        case PATIENT_DISCHARGED: return "Discharged";
+        default:                 return "Unknown";
+    }
+}
+
+static const char *appointment_status_str(AppointmentStatus status) {
+    switch (status) {
+        case APPT_SCHEDULED: return "Scheduled";
+        case APPT_COMPLETED: return "Completed";
+        case APPT_CANCELLED: return "Cancelled";
+        default:             return "Unknown";
+    }
+}
+
+static Patient *find_patient_by_id(PatientList *list, int id) {
+    for (size_t i = 0; i < list->count; i++) {
+        if (list->items[i].active && list->items[i].id == id) {
+            return &list->items[i];
+        }
+    }
+    return NULL;
+}
+
+static Doctor *find_doctor_by_id(DoctorList *list, int id) {
+    for (size_t i = 0; i < list->count; i++) {
+        if (list->items[i].active && list->items[i].id == id) {
+            return &list->items[i];
+        }
+    }
+    return NULL;
+}
+
+static Appointment *find_appointment_by_id(AppointmentList *list, int id) {
+    for (size_t i = 0; i < list->count; i++) {
+        if (list->items[i].active && list->items[i].id == id) {
+            return &list->items[i];
+        }
+    }
+    return NULL;
+}
+
+static Ward *find_ward_by_id(WardList *list, int id) {
+    for (size_t i = 0; i < list->count; i++) {
+        if (list->items[i].active && list->items[i].ward_id == id) {
+            return &list->items[i];
+        }
+    }
+    return NULL;
+}
+
+static Bill *find_bill_by_id(BillList *list, int id) {
+    for (size_t i = 0; i < list->count; i++) {
+        if (list->items[i].active && list->items[i].id == id) {
+            return &list->items[i];
+        }
+    }
+    return NULL;
+}
+
+/* =========================================================================
+ * SEED DATA & FILE PERSISTENCE
+ * ========================================================================= */
+
+static void seed_default_data(PatientList *pl, DoctorList *dl, AppointmentList *al, WardList *wl, BillList *bl) {
+    Ward w1 = {10, 101, "General Medical Ward", 20, 2, 45.00, 1};
+    Ward w2 = {11, 102, "Surgical Recovery", 12, 1, 85.00, 1};
+    Ward w3 = {12, 103, "Pediatric Wing", 15, 0, 50.00, 1};
+    Ward w4 = {13, 104, "Intensive Care Unit", 6, 0, 220.00, 1};
+
+    Doctor d1 = {201, "Dr. Samuel Kamau", "Internal Medicine", "+254-711-000101", 30.00, 1, 1};
+    Doctor d2 = {202, "Dr. Amina Hassan", "General Surgery", "+254-711-000102", 55.00, 1, 1};
+    Doctor d3 = {203, "Dr. Peter Ochieng", "Pediatrics", "+254-711-000103", 35.00, 1, 1};
+    Doctor d4 = {204, "Dr. Grace Wanjiku", "Cardiology", "+254-711-000104", 65.00, 1, 1};
+
+    Patient p1 = {1001, "Alice Muthoni", 29, 'F', "O+", "+254-722-111222",
+                  "14 Market St, Kerugoya", "Seasonal fever & dehydration",
+                  "2026-11-20", 201, 101, PATIENT_INPATIENT, 1};
+    Patient p2 = {1002, "Brian Kiprop", 44, 'M', "A+", "+254-722-333444",
+                  "88 Highlands Rd, Baricho", "Post-appendectomy checkup",
+                  "2026-11-18", 202, 102, PATIENT_INPATIENT, 1};
+    Patient p3 = {1003, "Clara Njeri", 36, 'F', "B+", "+254-722-555666",
+                  "5 Riverview Ave, Kutus", "Routine blood pressure review",
+                  "2026-11-24", 204, -1, PATIENT_OUTPATIENT, 1};
+
+    Appointment a1 = {5001, 1003, 204, "2026-11-27", "09:30",
+                      "Hypertension follow-up and ECG review", APPT_SCHEDULED, 1};
+    Appointment a2 = {5002, 1001, 201, "2026-11-26", "11:00",
+                      "Daily inpatient rounds", APPT_COMPLETED, 1};
+
+    Bill b1 = {9001, 1001, "2026-11-24", 30.00, 180.00, 45.00, 25.00,
+               0.00, 280.00, 150.00, 0, 1};
+
+    if (ensure_ward_capacity(wl)) wl->items[wl->count++] = w1;
+    if (ensure_ward_capacity(wl)) wl->items[wl->count++] = w2;
+    if (ensure_ward_capacity(wl)) wl->items[wl->count++] = w3;
+    if (ensure_ward_capacity(wl)) wl->items[wl->count++] = w4;
+    wl->next_id = 14;
+
+    if (ensure_doctor_capacity(dl)) dl->items[dl->count++] = d1;
+    if (ensure_doctor_capacity(dl)) dl->items[dl->count++] = d2;
+    if (ensure_doctor_capacity(dl)) dl->items[dl->count++] = d3;
+    if (ensure_doctor_capacity(dl)) dl->items[dl->count++] = d4;
+    dl->next_id = 205;
+
+    if (ensure_patient_capacity(pl)) pl->items[pl->count++] = p1;
+    if (ensure_patient_capacity(pl)) pl->items[pl->count++] = p2;
+    if (ensure_patient_capacity(pl)) pl->items[pl->count++] = p3;
+    pl->next_id = 1004;
+
+    if (ensure_appointment_capacity(al)) al->items[al->count++] = a1;
+    if (ensure_appointment_capacity(al)) al->items[al->count++] = a2;
+    al->next_id = 5003;
+
+    if (ensure_bill_capacity(bl)) bl->items[bl->count++] = b1;
+    bl->next_id = 9002;
+}
+
+static int save_patients(const PatientList *list, const char *filename) {
+    FILE *fp = fopen(filename, "wb");
+    if (!fp) return 0;
+    if (fwrite(&list->next_id, sizeof(int), 1, fp) != 1 ||
+        fwrite(&list->count, sizeof(size_t), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
+    if (list->count > 0 && fwrite(list->items, sizeof(Patient), list->count, fp) != list->count) {
+        fclose(fp);
+        return 0;
+    }
+    fclose(fp);
+    return 1;
+}
+
+static int load_patients(PatientList *list, const char *filename) {
+    FILE *fp = fopen(filename, "rb");
+    size_t file_count = 0;
+    int next_id = 1001;
+
+    if (!fp) return 0;
+    if (fread(&next_id, sizeof(int), 1, fp) != 1 ||
+        fread(&file_count, sizeof(size_t), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
+    free_patient_list(list);
+    init_patient_list(list);
+    list->next_id = next_id;
+
+    for (size_t i = 0; i < file_count; i++) {
+        Patient p;
+        if (fread(&p, sizeof(Patient), 1, fp) != 1) break;
+        if (ensure_patient_capacity(list)) {
+            list->items[list->count++] = p;
+        }
+    }
+    fclose(fp);
+    return 1;
+}
+
+static int save_doctors(const DoctorList *list, const char *filename) {
+    FILE *fp = fopen(filename, "wb");
+    if (!fp) return 0;
+    if (fwrite(&list->next_id, sizeof(int), 1, fp) != 1 ||
+        fwrite(&list->count, sizeof(size_t), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
+    if (list->count > 0 && fwrite(list->items, sizeof(Doctor), list->count, fp) != list->count) {
+        fclose(fp);
+        return 0;
+    }
+    fclose(fp);
+    return 1;
+}
+
+static int load_doctors(DoctorList *list, const char *filename) {
+    FILE *fp = fopen(filename, "rb");
+    size_t file_count = 0;
+    int next_id = 201;
+
+    if (!fp) return 0;
+    if (fread(&next_id, sizeof(int), 1, fp) != 1 ||
+        fread(&file_count, sizeof(size_t), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
+    free_doctor_list(list);
+    init_doctor_list(list);
+    list->next_id = next_id;
+
+    for (size_t i = 0; i < file_count; i++) {
+        Doctor d;
+        if (fread(&d, sizeof(Doctor), 1, fp) != 1) break;
+        if (ensure_doctor_capacity(list)) {
+            list->items[list->count++] = d;
+        }
+    }
+    fclose(fp);
+    return 1;
+}
+
+static int save_appointments(const AppointmentList *list, const char *filename) {
+    FILE *fp = fopen(filename, "wb");
+    if (!fp) return 0;
+    if (fwrite(&list->next_id, sizeof(int), 1, fp) != 1 ||
+        fwrite(&list->count, sizeof(size_t), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
+    if (list->count > 0 && fwrite(list->items, sizeof(Appointment), list->count, fp) != list->count) {
+        fclose(fp);
+        return 0;
+    }
+    fclose(fp);
+    return 1;
+}
+
+static int load_appointments(AppointmentList *list, const char *filename) {
+    FILE *fp = fopen(filename, "rb");
+    size_t file_count = 0;
+    int next_id = 5001;
+
+    if (!fp) return 0;
+    if (fread(&next_id, sizeof(int), 1, fp) != 1 ||
+        fread(&file_count, sizeof(size_t), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
+    free_appointment_list(list);
+    init_appointment_list(list);
+    list->next_id = next_id;
+
+    for (size_t i = 0; i < file_count; i++) {
+        Appointment a;
+        if (fread(&a, sizeof(Appointment), 1, fp) != 1) break;
+        if (ensure_appointment_capacity(list)) {
+            list->items[list->count++] = a;
+        }
+    }
+    fclose(fp);
+    return 1;
+}
+
+static int save_wards(const WardList *list, const char *filename) {
+    FILE *fp = fopen(filename, "wb");
+    if (!fp) return 0;
+    if (fwrite(&list->next_id, sizeof(int), 1, fp) != 1 ||
+        fwrite(&list->count, sizeof(size_t), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
+    if (list->count > 0 && fwrite(list->items, sizeof(Ward), list->count, fp) != list->count) {
+        fclose(fp);
+        return 0;
+    }
+    fclose(fp);
+    return 1;
+}
+
+static int load_wards(WardList *list, const char *filename) {
+    FILE *fp = fopen(filename, "rb");
+    size_t file_count = 0;
+    int next_id = 10;
+
+    if (!fp) return 0;
+    if (fread(&next_id, sizeof(int), 1, fp) != 1 ||
+        fread(&file_count, sizeof(size_t), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
+    free_ward_list(list);
+    init_ward_list(list);
+    list->next_id = next_id;
+
+    for (size_t i = 0; i < file_count; i++) {
+        Ward w;
+        if (fread(&w, sizeof(Ward), 1, fp) != 1) break;
+        if (ensure_ward_capacity(list)) {
+            list->items[list->count++] = w;
+        }
+    }
+    fclose(fp);
+    return 1;
+}
+
+static int save_bills(const BillList *list, const char *filename) {
+    FILE *fp = fopen(filename, "wb");
+    if (!fp) return 0;
+    if (fwrite(&list->next_id, sizeof(int), 1, fp) != 1 ||
+        fwrite(&list->count, sizeof(size_t), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
+    if (list->count > 0 && fwrite(list->items, sizeof(Bill), list->count, fp) != list->count) {
+        fclose(fp);
+        return 0;
+    }
+    fclose(fp);
+    return 1;
+}
+
+static int load_bills(BillList *list, const char *filename) {
+    FILE *fp = fopen(filename, "rb");
+    size_t file_count = 0;
+    int next_id = 9001;
+
+    if (!fp) return 0;
+    if (fread(&next_id, sizeof(int), 1, fp) != 1 ||
+        fread(&file_count, sizeof(size_t), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
+    free_bill_list(list);
+    init_bill_list(list);
+    list->next_id = next_id;
+
+    for (size_t i = 0; i < file_count; i++) {
+        Bill b;
+        if (fread(&b, sizeof(Bill), 1, fp) != 1) break;
+        if (ensure_bill_capacity(list)) {
+            list->items[list->count++] = b;
+        }
+    }
+    fclose(fp);
+    return 1;
+}
+
+static void save_all_data(const PatientList *pl, const DoctorList *dl, const AppointmentList *al, const WardList *wl, const BillList *bl) {
+    save_patients(pl, FILE_PATIENTS);
+    save_doctors(dl, FILE_DOCTORS);
+    save_appointments(al, FILE_APPOINTMENTS);
+    save_wards(wl, FILE_WARDS);
+    save_bills(bl, FILE_BILLS);
+}
+
+static void load_all_data(PatientList *pl, DoctorList *dl, AppointmentList *al, WardList *wl, BillList *bl) {
+    load_patients(pl, FILE_PATIENTS);
+    load_doctors(dl, FILE_DOCTORS);
+    load_appointments(al, FILE_APPOINTMENTS);
+    load_wards(wl, FILE_WARDS);
+    load_bills(bl, FILE_BILLS);
+}
+
+/* =========================================================================
+ * PATIENT MANAGEMENT
+ * ========================================================================= */
+
+static void patient_menu(PatientList *pl, DoctorList *dl, WardList *wl) {
+    int choice = 0;
+    do {
+        print_header("PATIENT MANAGEMENT");
+        printf("  1. Register / Admit Patient\n");
+        printf("  2. View All Patients\n");
+        printf("  3. Search Patients (ID, Name, Diagnosis)\n");
+        printf("  4. Update Patient Record\n");
+        printf("  5. Discharge Patient\n");
+        printf("  6. Sort Patients by Name\n");
+        printf("  7. Sort Patients by ID\n");
+        printf("  0. Back to Main Menu\n");
+        print_separator('-', 52);
+
+        if (!read_int_range("Select option: ", 0, 7, &choice)) {
+            printf("[Error] Enter a valid option (0-7).\n");
+            continue;
+        }
+
+        switch (choice) {
+            case 1: admit_patient(pl, dl, wl); pause_for_enter(); break;
+            case 2: list_patients(pl, dl, wl); pause_for_enter(); break;
+            case 3: search_patients(pl, dl); pause_for_enter(); break;
+            case 4: update_patient_record(pl, dl, wl); pause_for_enter(); break;
+            case 5: discharge_patient(pl, wl); pause_for_enter(); break;
+            case 6: sort_patients_by_name(pl); printf("[Info] Patients sorted by name.\n"); pause_for_enter(); break;
+            case 7: sort_patients_by_id(pl); printf("[Info] Patients sorted by ID.\n"); pause_for_enter(); break;
+            case 0: break;
+            default: break;
+        }
+    } while (choice != 0);
+}
+
+static void admit_patient(PatientList *pl, DoctorList *dl, WardList *wl) {
+    Patient p;
+    int doc_id = 0;
+    int status_choice = 1;
+
+    memset(&p, 0, sizeof(Patient));
+    p.id = pl->next_id;
+    p.active = 1;
+    p.assigned_ward_id = -1;
+
+    print_header("REGISTER / ADMIT PATIENT");
+    if (!read_line("Full Name: ", p.full_name, sizeof(p.full_name)) || p.full_name[0] == '\0') {
+        printf("[Error] Patient name cannot be empty.\n");
+        return;
+    }
+    if (!read_int_range("Age (0-130): ", 0, 130, &p.age)) {
+        printf("[Error] Invalid age.\n");
+        return;
+    }
+    if (!read_char_choice("Gender (M/F/O): ", "MFO", &p.gender)) {
+        printf("[Error] Invalid gender.\n");
+        return;
+    }
+    read_line("Blood Group (e.g., O+, A-, B+): ", p.blood_group, sizeof(p.blood_group));
+    read_line("Phone Number: ", p.phone, sizeof(p.phone));
+    read_line("Address: ", p.address, sizeof(p.address));
+    read_line("Primary Diagnosis / Complaint: ", p.diagnosis, sizeof(p.diagnosis));
+
+    read_line("Admission Date (YYYY-MM-DD, blank for today): ", p.admission_date, sizeof(p.admission_date));
+    if (p.admission_date[0] == '\0') {
+        get_current_date(p.admission_date, sizeof(p.admission_date));
+    } else if (!is_valid_date(p.admission_date)) {
+        printf("[Error] Invalid date format. Use YYYY-MM-DD.\n");
+        return;
+    }
+
+    if (dl->count > 0) {
+        printf("\nAvailable Doctors:\n");
+        for (size_t i = 0; i < dl->count; i++) {
+            if (dl->items[i].active) {
+                printf("  ID %d: %s (%s) - %s\n",
+                       dl->items[i].id,
+                       dl->items[i].full_name,
+                       dl->items[i].specialization,
+                       dl->items[i].available ? "Available" : "Unavailable");
             }
-        } else {
-            if (length > 0) {
-                word[length] = '\0';
-                table_increment(table, word);
-                length = 0;
+        }
+        if (read_int_range("Assign Doctor ID (0 for none): ", 0, 999999, &doc_id)) {
+            if (doc_id != 0 && find_doctor_by_id(dl, doc_id) == NULL) {
+                printf("[Warning] Doctor ID %d not found; setting unassigned.\n", doc_id);
+                doc_id = 0;
             }
-            if (*p == '\0') {
+        }
+    }
+    p.assigned_doctor_id = doc_id;
+
+    printf("\nAdmission Type:\n  1. Outpatient\n  2. Inpatient\n");
+    if (!read_int_range("Select type (1-2): ", 1, 2, &status_choice)) {
+        status_choice = 1;
+    }
+    p.status = (status_choice == 2) ? PATIENT_INPATIENT : PATIENT_OUTPATIENT;
+
+    if (p.status == PATIENT_INPATIENT && wl->count > 0) {
+        int ward_num = 0;
+        printf("\nAvailable Wards:\n");
+        for (size_t i = 0; i < wl->count; i++) {
+            Ward *w = &wl->items[i];
+            if (w->active) {
+                printf("  Ward %d: %-22s (%d/%d beds occupied, $%.2f/day)\n",
+                       w->ward_id, w->ward_name, w->occupied_beds, w->total_beds, w->daily_rate);
+            }
+        }
+        if (read_int_range("Assign Ward ID (0 to skip): ", 0, 999999, &ward_num) && ward_num != 0) {
+            Ward *selected_ward = NULL;
+            for (size_t i = 0; i < wl->count; i++) {
+                if (wl->items[i].active && wl->items[i].ward_id == ward_num) {
+                    selected_ward = &wl->items[i];
+                    break;
+                }
+            }
+            if (selected_ward && selected_ward->occupied_beds < selected_ward->total_beds) {
+                selected_ward->occupied_beds++;
+                p.assigned_ward_id = selected_ward->ward_id;
+                printf("[Info] Assigned Bed in Ward %d (%s).\n",
+                       selected_ward->ward_id, selected_ward->ward_name);
+            } else {
+                printf("[Warning] Ward unavailable or full; patient admitted without ward bed.\n");
+            }
+        }
+    }
+
+    if (!ensure_patient_capacity(pl)) {
+        printf("[Error] Memory allocation failed.\n");
+        return;
+    }
+    pl->items[pl->count++] = p;
+    pl->next_id++;
+    printf("[Success] Patient registered with ID %d.\n", p.id);
+}
+
+static void print_patient_row(const Patient *p, const DoctorList *dl, const WardList *wl) {
+    const Doctor *doc = (p->assigned_doctor_id > 0) ? find_doctor_by_id((DoctorList *)dl, p->assigned_doctor_id) : NULL;
+    const Ward *ward = NULL;
+    if (p->assigned_ward_id > 0) {
+        for (size_t i = 0; i < wl->count; i++) {
+            if (wl->items[i].active && wl->items[i].ward_id == p->assigned_ward_id) {
+                ward = &wl->items[i];
                 break;
             }
         }
     }
+
+    printf("ID: %-5d | Name: %-22s | Age/Sex: %2d/%c | Status: %-10s\n",
+           p->id, p->full_name, p->age, p->gender, patient_status_str(p->status));
+    printf("   Blood: %-4s | Phone: %-16s | Admitted: %s | Ward: %s\n",
+           p->blood_group[0] ? p->blood_group : "N/A",
+           p->phone[0] ? p->phone : "N/A",
+           p->admission_date,
+           ward ? ward->ward_name : "None");
+    printf("   Doctor: %-22s | Diagnosis: %s\n",
+           doc ? doc->full_name : "Unassigned",
+           p->diagnosis[0] ? p->diagnosis : "None recorded");
 }
- 
-// ---------- string helpers ----------
-static void reverse_string(char *text) {
-    size_t length = strlen(text);
-    for (size_t i = 0; i < length / 2; i++) {
-        char temp = text[i];
-        text[i] = text[length - 1 - i];
-        text[length - 1 - i] = temp;
+
+static void list_patients(const PatientList *pl, const DoctorList *dl, const WardList *wl) {
+    size_t shown = 0;
+    print_header("PATIENT DIRECTORY");
+    for (size_t i = 0; i < pl->count; i++) {
+        if (pl->items[i].active) {
+            print_patient_row(&pl->items[i], dl, wl);
+            print_separator('-', 52);
+            shown++;
+        }
+    }
+    if (shown == 0) {
+        printf("No patient records found.\n");
+    } else {
+        printf("Total active patient records: %zu\n", shown);
     }
 }
- 
-static int is_palindrome(const char *text) {
-    size_t left = 0;
-    size_t right = strlen(text);
-    while (left < right) {
-        while (left < right && !isalnum((unsigned char)text[left])) {
-            left++;
-        }
-        while (left < right && !isalnum((unsigned char)text[right - 1])) {
-            right--;
-        }
-        if (left >= right) {
-            break;
-        }
-        if (tolower((unsigned char)text[left]) != tolower((unsigned char)text[right - 1])) {
-            return 0;
-        }
-        left++;
-        right--;
+
+static void search_patients(const PatientList *pl, const DoctorList *dl) {
+    char query[128];
+    int search_id = 0;
+    size_t matches = 0;
+
+    print_header("SEARCH PATIENTS");
+    if (!read_line("Enter ID, Name, or Diagnosis keyword: ", query, sizeof(query)) || query[0] == '\0') {
+        printf("[Error] Search query cannot be empty.\n");
+        return;
     }
-    return 1;
+
+    search_id = atoi(query);
+    for (size_t i = 0; i < pl->count; i++) {
+        const Patient *p = &pl->items[i];
+        if (!p->active) continue;
+        if ((search_id > 0 && p->id == search_id) ||
+            contains_case_insensitive(p->full_name, query) ||
+            contains_case_insensitive(p->diagnosis, query)) {
+            const Doctor *doc = (p->assigned_doctor_id > 0) ? find_doctor_by_id((DoctorList *)dl, p->assigned_doctor_id) : NULL;
+            printf("  [%d] %-22s | %-10s | Doc: %-18s | Dx: %s\n",
+                   p->id, p->full_name, patient_status_str(p->status),
+                   doc ? doc->full_name : "None", p->diagnosis);
+            matches++;
+        }
+    }
+    printf("Matches found: %zu\n", matches);
 }
- 
-static int count_vowels(const char *text) {
+
+static void update_patient_record(PatientList *pl, DoctorList *dl, WardList *wl) {
+    int id = 0;
+    Patient *p;
+    char buf[MAX_DIAG_LEN];
+
+    print_header("UPDATE PATIENT RECORD");
+    if (!read_int_range("Enter Patient ID: ", 1, 999999, &id)) {
+        printf("[Error] Invalid ID.\n");
+        return;
+    }
+    p = find_patient_by_id(pl, id);
+    if (!p) {
+        printf("[Error] Patient ID %d not found.\n", id);
+        return;
+    }
+
+    printf("Updating %s (ID %d). Leave blank to keep current value.\n", p->full_name, p->id);
+    if (read_line("New Phone: ", buf, sizeof(buf)) && buf[0] != '\0') {
+        snprintf(p->phone, sizeof(p->phone), "%s", buf);
+    }
+    if (read_line("New Address: ", buf, sizeof(buf)) && buf[0] != '\0') {
+        snprintf(p->address, sizeof(p->address), "%s", buf);
+    }
+    if (read_line("New Diagnosis / Notes: ", buf, sizeof(buf)) && buf[0] != '\0') {
+        snprintf(p->diagnosis, sizeof(p->diagnosis), "%s", buf);
+    }
+
+    if (dl->count > 0) {
+        int new_doc = 0;
+        if (read_int_range("New Assigned Doctor ID (0 to keep current): ", 0, 999999, &new_doc) && new_doc != 0) {
+            if (find_doctor_by_id(dl, new_doc) != NULL) {
+                p->assigned_doctor_id = new_doc;
+            } else {
+                printf("[Warning] Doctor ID %d not found; keeping previous assignment.\n", new_doc);
+            }
+        }
+    }
+
+    if (p->status == PATIENT_OUTPATIENT) {
+        char ch = 'N';
+        if (read_char_choice("Promote to Inpatient? (Y/N): ", "YN", &ch) && ch == 'Y') {
+            int ward_num = 0;
+            p->status = PATIENT_INPATIENT;
+            if (read_int_range("Enter Ward ID to assign (0 for none): ", 0, 999999, &ward_num) && ward_num != 0) {
+                for (size_t i = 0; i < wl->count; i++) {
+                    if (wl->items[i].active && wl->items[i].ward_id == ward_num) {
+                        if (wl->items[i].occupied_beds < wl->items[i].total_beds) {
+                            wl->items[i].occupied_beds++;
+                            p->assigned_ward_id = ward_num;
+                        } else {
+                            printf("[Warning] Ward is full.\n");
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    printf("[Success] Patient record updated.\n");
+}
+
+static void discharge_patient(PatientList *pl, WardList *wl) {
+    int id = 0;
+    Patient *p;
+
+    print_header("DISCHARGE PATIENT");
+    if (!read_int_range("Enter Patient ID to discharge: ", 1, 999999, &id)) {
+        printf("[Error] Invalid ID.\n");
+        return;
+    }
+    p = find_patient_by_id(pl, id);
+    if (!p) {
+        printf("[Error] Patient ID %d not found.\n", id);
+        return;
+    }
+    if (p->status == PATIENT_DISCHARGED) {
+        printf("[Info] Patient %s is already discharged.\n", p->full_name);
+        return;
+    }
+
+    if (p->assigned_ward_id > 0) {
+        for (size_t i = 0; i < wl->count; i++) {
+            if (wl->items[i].active && wl->items[i].ward_id == p->assigned_ward_id) {
+                if (wl->items[i].occupied_beds > 0) {
+                    wl->items[i].occupied_beds--;
+                }
+                break;
+            }
+        }
+        p->assigned_ward_id = -1;
+    }
+
+    p->status = PATIENT_DISCHARGED;
+    printf("[Success] Patient %s (ID %d) marked as Discharged and bed released.\n", p->full_name, p->id);
+}
+
+static void sort_patients_by_name(PatientList *pl) {
+    for (size_t i = 0; i < pl->count; i++) {
+        for (size_t j = i + 1; j < pl->count; j++) {
+            if (strcmp(pl->items[i].full_name, pl->items[j].full_name) > 0) {
+                Patient tmp = pl->items[i];
+                pl->items[i] = pl->items[j];
+                pl->items[j] = tmp;
+            }
+        }
+    }
+}
+
+static void sort_patients_by_id(PatientList *pl) {
+    for (size_t i = 0; i < pl->count; i++) {
+        for (size_t j = i + 1; j < pl->count; j++) {
+            if (pl->items[i].id > pl->items[j].id) {
+                Patient tmp = pl->items[i];
+                pl->items[i] = pl->items[j];
+                pl->items[j] = tmp;
+            }
+        }
+    }
+}
+
+/* =========================================================================
+ * DOCTOR MANAGEMENT
+ * ========================================================================= */
+
+static void doctor_menu(DoctorList *dl, const AppointmentList *al) {
+    int choice = 0;
+    do {
+        print_header("DOCTOR MANAGEMENT");
+        printf("  1. Add Doctor\n");
+        printf("  2. View All Doctors\n");
+        printf("  3. Search Doctors by Specialization\n");
+        printf("  4. Toggle Doctor Availability\n");
+        printf("  5. Update Consultation Fee\n");
+        printf("  0. Back to Main Menu\n");
+        print_separator('-', 52);
+
+        if (!read_int_range("Select option: ", 0, 5, &choice)) {
+            printf("[Error] Enter a valid option (0-5).\n");
+            continue;
+        }
+
+        switch (choice) {
+            case 1: add_doctor(dl); pause_for_enter(); break;
+            case 2: list_doctors(dl, al); pause_for_enter(); break;
+            case 3: search_doctors_by_spec(dl); pause_for_enter(); break;
+            case 4: toggle_doctor_availability(dl); pause_for_enter(); break;
+            case 5: update_doctor_fee(dl); pause_for_enter(); break;
+            case 0: break;
+            default: break;
+        }
+    } while (choice != 0);
+}
+
+static void add_doctor(DoctorList *dl) {
+    Doctor d;
+    memset(&d, 0, sizeof(Doctor));
+    d.id = dl->next_id;
+    d.available = 1;
+    d.active = 1;
+
+    print_header("ADD DOCTOR");
+    if (!read_line("Doctor Full Name (e.g., Dr. Jane Mwangi): ", d.full_name, sizeof(d.full_name)) ||
+        d.full_name[0] == '\0') {
+        printf("[Error] Name cannot be empty.\n");
+        return;
+    }
+    if (!read_line("Specialization: ", d.specialization, sizeof(d.specialization)) ||
+        d.specialization[0] == '\0') {
+        printf("[Error] Specialization cannot be empty.\n");
+        return;
+    }
+    read_line("Phone Number: ", d.phone, sizeof(d.phone));
+    if (!read_double_min("Consultation Fee ($): ", 0.0, &d.consultation_fee)) {
+        printf("[Error] Invalid fee amount.\n");
+        return;
+    }
+
+    if (!ensure_doctor_capacity(dl)) {
+        printf("[Error] Memory allocation failed.\n");
+        return;
+    }
+    dl->items[dl->count++] = d;
+    dl->next_id++;
+    printf("[Success] Doctor added with ID %d.\n", d.id);
+}
+
+static int count_doctor_appointments(const AppointmentList *al, int doctor_id) {
     int total = 0;
-    for (const char *p = text; *p != '\0'; p++) {
-        char c = (char)tolower((unsigned char)*p);
-        if (c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u') {
+    for (size_t i = 0; i < al->count; i++) {
+        if (al->items[i].active && al->items[i].doctor_id == doctor_id &&
+            al->items[i].status == APPT_SCHEDULED) {
             total++;
         }
     }
     return total;
 }
- 
-// ---------- math helpers ----------
-static unsigned long gcd(unsigned long a, unsigned long b) {
-    while (b != 0) {
-        unsigned long temp = a % b;
-        a = b;
-        b = temp;
+
+static void list_doctors(const DoctorList *dl, const AppointmentList *al) {
+    size_t shown = 0;
+    print_header("DOCTOR DIRECTORY");
+    for (size_t i = 0; i < dl->count; i++) {
+        const Doctor *d = &dl->items[i];
+        if (!d->active) continue;
+        int upcoming = count_doctor_appointments(al, d->id);
+        printf("ID: %-4d | %-22s | Spec: %-18s | Fee: $%6.2f\n",
+               d->id, d->full_name, d->specialization, d->consultation_fee);
+        printf("   Phone: %-16s | Status: %-11s | Upcoming Appts: %d\n",
+               d->phone[0] ? d->phone : "N/A",
+               d->available ? "Available" : "Unavailable",
+               upcoming);
+        print_separator('-', 52);
+        shown++;
     }
-    return a;
+    if (shown == 0) {
+        printf("No doctor records found.\n");
+    }
 }
- 
-static int is_prime(int n) {
-    if (n < 2) {
-        return 0;
+
+static void search_doctors_by_spec(const DoctorList *dl) {
+    char spec[MAX_SPEC_LEN];
+    size_t found = 0;
+
+    print_header("SEARCH DOCTORS BY SPECIALIZATION");
+    if (!read_line("Enter specialization keyword: ", spec, sizeof(spec)) || spec[0] == '\0') {
+        printf("[Error] Keyword cannot be empty.\n");
+        return;
     }
-    for (int i = 2; i * i <= n; i++) {
-        if (n % i == 0) {
-            return 0;
+
+    for (size_t i = 0; i < dl->count; i++) {
+        const Doctor *d = &dl->items[i];
+        if (d->active && contains_case_insensitive(d->specialization, spec)) {
+            printf("  ID %-4d | %-22s | %-18s | $%.2f | %s\n",
+                   d->id, d->full_name, d->specialization, d->consultation_fee,
+                   d->available ? "Available" : "Unavailable");
+            found++;
         }
     }
-    return 1;
+    printf("Doctors matched: %zu\n", found);
 }
- 
-static unsigned long long fibonacci(int n) {
-    unsigned long long a = 0;
-    unsigned long long b = 1;
-    for (int i = 0; i < n; i++) {
-        unsigned long long next = a + b;
-        a = b;
-        b = next;
+
+static void toggle_doctor_availability(DoctorList *dl) {
+    int id = 0;
+    Doctor *d;
+
+    print_header("TOGGLE DOCTOR AVAILABILITY");
+    if (!read_int_range("Enter Doctor ID: ", 1, 999999, &id)) {
+        printf("[Error] Invalid ID.\n");
+        return;
     }
-    return a;
+    d = find_doctor_by_id(dl, id);
+    if (!d) {
+        printf("[Error] Doctor ID %d not found.\n", id);
+        return;
+    }
+    d->available = d->available ? 0 : 1;
+    printf("[Success] %s is now marked as %s.\n",
+           d->full_name, d->available ? "Available" : "Unavailable");
 }
- 
-static void print_primes(int limit) {
-    printf("primes up to %d:", limit);
-    for (int n = 2; n <= limit; n++) {
-        if (is_prime(n)) {
-            printf(" %d", n);
+
+static void update_doctor_fee(DoctorList *dl) {
+    int id = 0;
+    double fee = 0.0;
+    Doctor *d;
+
+    print_header("UPDATE CONSULTATION FEE");
+    if (!read_int_range("Enter Doctor ID: ", 1, 999999, &id)) {
+        printf("[Error] Invalid ID.\n");
+        return;
+    }
+    d = find_doctor_by_id(dl, id);
+    if (!d) {
+        printf("[Error] Doctor ID %d not found.\n", id);
+        return;
+    }
+    if (!read_double_min("Enter new consultation fee ($): ", 0.0, &fee)) {
+        printf("[Error] Invalid fee.\n");
+        return;
+    }
+    d->consultation_fee = fee;
+    printf("[Success] Updated %s consultation fee to $%.2f.\n", d->full_name, d->consultation_fee);
+}
+
+/* =========================================================================
+ * APPOINTMENT SCHEDULING
+ * ========================================================================= */
+
+static void appointment_menu(AppointmentList *al, PatientList *pl, DoctorList *dl) {
+    int choice = 0;
+    do {
+        print_header("APPOINTMENT SCHEDULING");
+        printf("  1. Schedule New Appointment\n");
+        printf("  2. View All Appointments\n");
+        printf("  3. Update Appointment Status (Complete / Cancel)\n");
+        printf("  4. View Appointments by Doctor\n");
+        printf("  0. Back to Main Menu\n");
+        print_separator('-', 52);
+
+        if (!read_int_range("Select option: ", 0, 4, &choice)) {
+            printf("[Error] Enter a valid option (0-4).\n");
+            continue;
+        }
+
+        switch (choice) {
+            case 1: schedule_appointment(al, pl, dl); pause_for_enter(); break;
+            case 2: list_appointments(al, pl, dl); pause_for_enter(); break;
+            case 3: update_appointment_status(al); pause_for_enter(); break;
+            case 4: view_appointments_by_doctor(al, pl, dl); pause_for_enter(); break;
+            case 0: break;
+            default: break;
+        }
+    } while (choice != 0);
+}
+
+static void schedule_appointment(AppointmentList *al, PatientList *pl, DoctorList *dl) {
+    Appointment a;
+    memset(&a, 0, sizeof(Appointment));
+    a.id = al->next_id;
+    a.status = APPT_SCHEDULED;
+    a.active = 1;
+
+    print_header("SCHEDULE APPOINTMENT");
+    if (!read_int_range("Patient ID: ", 1, 999999, &a.patient_id) ||
+        find_patient_by_id(pl, a.patient_id) == NULL) {
+        printf("[Error] Active patient not found.\n");
+        return;
+    }
+    if (!read_int_range("Doctor ID: ", 1, 999999, &a.doctor_id) ||
+        find_doctor_by_id(dl, a.doctor_id) == NULL) {
+        printf("[Error] Active doctor not found.\n");
+        return;
+    }
+    if (!read_line("Appointment Date (YYYY-MM-DD): ", a.date, sizeof(a.date)) ||
+        !is_valid_date(a.date)) {
+        printf("[Error] Invalid date format.\n");
+        return;
+    }
+    if (!read_line("Time Slot (e.g., 10:30): ", a.time_slot, sizeof(a.time_slot)) ||
+        a.time_slot[0] == '\0') {
+        printf("[Error] Time slot cannot be empty.\n");
+        return;
+    }
+    read_line("Reason / Visit Notes: ", a.reason, sizeof(a.reason));
+
+    /* Check for double-booking on same doctor, date, and time */
+    for (size_t i = 0; i < al->count; i++) {
+        const Appointment *existing = &al->items[i];
+        if (existing->active &&
+            existing->status == APPT_SCHEDULED &&
+            existing->doctor_id == a.doctor_id &&
+            strcmp(existing->date, a.date) == 0 &&
+            strcmp(existing->time_slot, a.time_slot) == 0) {
+            printf("[Error] Doctor %d already has a scheduled appointment on %s at %s.\n",
+                   a.doctor_id, a.date, a.time_slot);
+            return;
         }
     }
-    printf("\n");
+
+    if (!ensure_appointment_capacity(al)) {
+        printf("[Error] Memory allocation failed.\n");
+        return;
+    }
+    al->items[al->count++] = a;
+    al->next_id++;
+    printf("[Success] Appointment booked with ID %d.\n", a.id);
 }
- 
-// ---------- matrix ----------
-static void matrix_multiply(int a[N][N], int b[N][N], int out[N][N]) {
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            out[i][j] = 0;
-            for (int k = 0; k < N; k++) {
-                out[i][j] += a[i][k] * b[k][j];
-            }
+
+static void list_appointments(const AppointmentList *al, const PatientList *pl, const DoctorList *dl) {
+    size_t shown = 0;
+    print_header("ALL APPOINTMENTS");
+    for (size_t i = 0; i < al->count; i++) {
+        const Appointment *a = &al->items[i];
+        const Patient *p;
+        const Doctor *d;
+        if (!a->active) continue;
+        p = find_patient_by_id((PatientList *)pl, a->patient_id);
+        d = find_doctor_by_id((DoctorList *)dl, a->doctor_id);
+
+        printf("Appt #%-5d | %s %s | Status: %-9s\n",
+               a->id, a->date, a->time_slot, appointment_status_str(a->status));
+        printf("   Patient: %-20s (ID %d) | Doctor: %-20s (ID %d)\n",
+               p ? p->full_name : "Unknown", a->patient_id,
+               d ? d->full_name : "Unknown", a->doctor_id);
+        printf("   Reason: %s\n", a->reason[0] ? a->reason : "General consultation");
+        print_separator('-', 52);
+        shown++;
+    }
+    if (shown == 0) {
+        printf("No appointments found.\n");
+    }
+}
+
+static void update_appointment_status(AppointmentList *al) {
+    int id = 0;
+    int action = 0;
+    Appointment *a;
+
+    print_header("UPDATE APPOINTMENT STATUS");
+    if (!read_int_range("Enter Appointment ID: ", 1, 999999, &id)) {
+        printf("[Error] Invalid ID.\n");
+        return;
+    }
+    a = find_appointment_by_id(al, id);
+    if (!a) {
+        printf("[Error] Appointment %d not found.\n", id);
+        return;
+    }
+
+    printf("Current Status: %s\n", appointment_status_str(a->status));
+    printf("  1. Mark as Completed\n");
+    printf("  2. Mark as Cancelled\n");
+    printf("  3. Re-open as Scheduled\n");
+    if (!read_int_range("Select new status: ", 1, 3, &action)) {
+        printf("[Error] Invalid selection.\n");
+        return;
+    }
+
+    if (action == 1) a->status = APPT_COMPLETED;
+    else if (action == 2) a->status = APPT_CANCELLED;
+    else a->status = APPT_SCHEDULED;
+
+    printf("[Success] Appointment #%d status updated to %s.\n",
+           a->id, appointment_status_str(a->status));
+}
+
+static void view_appointments_by_doctor(const AppointmentList *al, const PatientList *pl, DoctorList *dl) {
+    int doc_id = 0;
+    const Doctor *d;
+    size_t count = 0;
+
+    print_header("APPOINTMENTS BY DOCTOR");
+    if (!read_int_range("Enter Doctor ID: ", 1, 999999, &doc_id)) {
+        printf("[Error] Invalid ID.\n");
+        return;
+    }
+    d = find_doctor_by_id(dl, doc_id);
+    if (!d) {
+        printf("[Error] Doctor ID %d not found.\n", doc_id);
+        return;
+    }
+
+    printf("Schedule for %s (%s):\n", d->full_name, d->specialization);
+    for (size_t i = 0; i < al->count; i++) {
+        const Appointment *a = &al->items[i];
+        const Patient *p;
+        if (!a->active || a->doctor_id != doc_id) continue;
+        p = find_patient_by_id((PatientList *)pl, a->patient_id);
+        printf("  #%d | %s %s | %-9s | Patient: %s | %s\n",
+               a->id, a->date, a->time_slot, appointment_status_str(a->status),
+               p ? p->full_name : "Unknown", a->reason);
+        count++;
+    }
+    printf("Total appointments for doctor: %zu\n", count);
+}
+
+/* =========================================================================
+ * WARD & BED MANAGEMENT
+ * ========================================================================= */
+
+static void ward_menu(WardList *wl, PatientList *pl) {
+    int choice = 0;
+    do {
+        print_header("WARD & BED MANAGEMENT");
+        printf("  1. Add New Ward\n");
+        printf("  2. View All Wards & Occupancy\n");
+        printf("  3. Assign Bed to Inpatient\n");
+        printf("  4. Release Bed from Patient\n");
+        printf("  0. Back to Main Menu\n");
+        print_separator('-', 52);
+
+        if (!read_int_range("Select option: ", 0, 4, &choice)) {
+            printf("[Error] Enter a valid option (0-4).\n");
+            continue;
         }
-    }
-}
- 
-static void matrix_print(int m[N][N]) {
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            printf("%4d", m[i][j]);
+
+        switch (choice) {
+            case 1: add_ward(wl); pause_for_enter(); break;
+            case 2: list_wards(wl); pause_for_enter(); break;
+            case 3: assign_bed_to_patient(wl, pl); pause_for_enter(); break;
+            case 4: release_patient_bed(wl, pl); pause_for_enter(); break;
+            case 0: break;
+            default: break;
         }
-        printf("\n");
+    } while (choice != 0);
+}
+
+static void add_ward(WardList *wl) {
+    Ward w;
+    memset(&w, 0, sizeof(Ward));
+    w.id = wl->next_id;
+    w.occupied_beds = 0;
+    w.active = 1;
+
+    print_header("ADD NEW WARD");
+    if (!read_int_range("Ward Number / ID (e.g., 105): ", 1, 9999, &w.ward_id)) {
+        printf("[Error] Invalid ward number.\n");
+        return;
+    }
+    if (find_ward_by_id(wl, w.ward_id) != NULL) {
+        printf("[Error] Ward %d already exists.\n", w.ward_id);
+        return;
+    }
+    if (!read_line("Ward Name: ", w.ward_name, sizeof(w.ward_name)) || w.ward_name[0] == '\0') {
+        printf("[Error] Ward name cannot be empty.\n");
+        return;
+    }
+    if (!read_int_range("Total Beds (1-500): ", 1, 500, &w.total_beds)) {
+        printf("[Error] Invalid bed count.\n");
+        return;
+    }
+    if (!read_double_min("Daily Room Rate ($): ", 0.0, &w.daily_rate)) {
+        printf("[Error] Invalid daily rate.\n");
+        return;
+    }
+
+    if (!ensure_ward_capacity(wl)) {
+        printf("[Error] Memory allocation failed.\n");
+        return;
+    }
+    wl->items[wl->count++] = w;
+    wl->next_id++;
+    printf("[Success] Ward %d (%s) added with %d beds.\n", w.ward_id, w.ward_name, w.total_beds);
+}
+
+static void list_wards(const WardList *wl) {
+    int total_beds = 0;
+    int total_occ = 0;
+
+    print_header("WARDS & BED OCCUPANCY");
+    for (size_t i = 0; i < wl->count; i++) {
+        const Ward *w = &wl->items[i];
+        int free_beds;
+        if (!w->active) continue;
+        free_beds = w->total_beds - w->occupied_beds;
+        total_beds += w->total_beds;
+        total_occ += w->occupied_beds;
+
+        printf("Ward %-4d | %-22s | Rate: $%6.2f/day\n",
+               w->ward_id, w->ward_name, w->daily_rate);
+        printf("   Occupied: %2d / %2d | Available Beds: %2d\n",
+               w->occupied_beds, w->total_beds, free_beds);
+        print_separator('-', 52);
+    }
+    printf("Hospital-wide Bed Summary: %d occupied / %d total (%d available)\n",
+           total_occ, total_beds, total_beds - total_occ);
+}
+
+static void assign_bed_to_patient(WardList *wl, PatientList *pl) {
+    int patient_id = 0;
+    int ward_num = 0;
+    Patient *p;
+    Ward *w;
+
+    print_header("ASSIGN BED TO PATIENT");
+    if (!read_int_range("Enter Patient ID: ", 1, 999999, &patient_id)) {
+        printf("[Error] Invalid ID.\n");
+        return;
+    }
+    p = find_patient_by_id(pl, patient_id);
+    if (!p) {
+        printf("[Error] Patient ID %d not found.\n", patient_id);
+        return;
+    }
+    if (p->status == PATIENT_DISCHARGED) {
+        printf("[Error] Cannot assign a bed to a discharged patient.\n");
+        return;
+    }
+    if (p->assigned_ward_id > 0) {
+        printf("[Error] Patient is already assigned to Ward %d.\n", p->assigned_ward_id);
+        return;
+    }
+    if (!read_int_range("Enter Ward ID: ", 1, 999999, &ward_num)) {
+        printf("[Error] Invalid Ward ID.\n");
+        return;
+    }
+    w = find_ward_by_id(wl, ward_num);
+    if (!w) {
+        printf("[Error] Ward %d not found.\n", ward_num);
+        return;
+    }
+    if (w->occupied_beds >= w->total_beds) {
+        printf("[Error] Ward %d (%s) has no available beds.\n", w->ward_id, w->ward_name);
+        return;
+    }
+
+    w->occupied_beds++;
+    p->assigned_ward_id = w->ward_id;
+    p->status = PATIENT_INPATIENT;
+    printf("[Success] Assigned %s to Ward %d (%s).\n", p->full_name, w->ward_id, w->ward_name);
+}
+
+static void release_patient_bed(WardList *wl, PatientList *pl) {
+    int patient_id = 0;
+    Patient *p;
+    Ward *w;
+
+    print_header("RELEASE PATIENT BED");
+    if (!read_int_range("Enter Patient ID: ", 1, 999999, &patient_id)) {
+        printf("[Error] Invalid ID.\n");
+        return;
+    }
+    p = find_patient_by_id(pl, patient_id);
+    if (!p || p->assigned_ward_id <= 0) {
+        printf("[Error] Patient has no active ward bed assignment.\n");
+        return;
+    }
+
+    w = find_ward_by_id(wl, p->assigned_ward_id);
+    if (w && w->occupied_beds > 0) {
+        w->occupied_beds--;
+    }
+    printf("[Success] Released bed in Ward %d for %s.\n", p->assigned_ward_id, p->full_name);
+    p->assigned_ward_id = -1;
+    if (p->status == PATIENT_INPATIENT) {
+        p->status = PATIENT_OUTPATIENT;
     }
 }
- 
-// ---------- student records ----------
-typedef struct {
-    char name[MAX_NAME];
-    int age;
-    double grade;
-} Student;
- 
-static int compare_by_grade(const void *left, const void *right) {
-    const Student *a = left;
-    const Student *b = right;
-    if (a->grade < b->grade) {
-        return 1;
-    }
-    if (a->grade > b->grade) {
-        return -1;
-    }
-    return strcmp(a->name, b->name);
-}
- 
-static double average_grade(const Student *students, size_t count) {
-    double total = 0.0;
-    for (size_t i = 0; i < count; i++) {
-        total += students[i].grade;
-    }
-    return count == 0 ? 0.0 : total / (double)count;
-}
- 
-static int save_students(const char *path, const Student *students, size_t count) {
-    FILE *file = fopen(path, "w");
-    if (file == NULL) {
-        return 0;
-    }
-    for (size_t i = 0; i < count; i++) {
-        fprintf(file, "%s,%d,%.1f\n", students[i].name, students[i].age, students[i].grade);
-    }
-    fclose(file);
-    return 1;
-}
- 
-// ---------- demos ----------
-static void demo_sorting(void) {
-    printf("\n== sorting and searching ==\n");
-    int values[] = {42, 7, 19, 3, 88, 23, 56, 1, 64, 11};
-    size_t count = sizeof(values) / sizeof(values[0]);
-    IntArray arr;
-    array_init(&arr);
-    for (size_t i = 0; i < count; i++) {
-        array_push(&arr, values[i]);
-    }
-    print_ints(arr.items, arr.size, "original ");
-    int copy_a[10];
-    int copy_b[10];
-    memcpy(copy_a, values, sizeof(values));
-    memcpy(copy_b, values, sizeof(values));
-    bubble_sort(arr.items, arr.size);
-    insertion_sort(copy_a, count);
-    quick_sort(copy_b, 0, count - 1);
-    print_ints(arr.items, arr.size, "bubble   ");
-    print_ints(copy_a, count, "insertion");
-    print_ints(copy_b, count, "quick    ");
-    int targets[] = {23, 5};
-    for (size_t i = 0; i < 2; i++) {
-        int position = binary_search(arr.items, arr.size, targets[i]);
-        if (position >= 0) {
-            printf("found %d at index %d\n", targets[i], position);
-        } else {
-            printf("%d is not in the array\n", targets[i]);
+
+/* =========================================================================
+ * BILLING & PAYMENTS
+ * ========================================================================= */
+
+static void billing_menu(BillList *bl, PatientList *pl, DoctorList *dl, WardList *wl) {
+    int choice = 0;
+    do {
+        print_header("BILLING & PAYMENTS");
+        printf("  1. Generate New Patient Bill\n");
+        printf("  2. View All Bills\n");
+        printf("  3. Record Payment on Bill\n");
+        printf("  4. View Unsettled Bills\n");
+        printf("  0. Back to Main Menu\n");
+        print_separator('-', 52);
+
+        if (!read_int_range("Select option: ", 0, 4, &choice)) {
+            printf("[Error] Enter a valid option (0-4).\n");
+            continue;
         }
+
+        switch (choice) {
+            case 1: create_bill(bl, pl, dl, wl); pause_for_enter(); break;
+            case 2: list_bills(bl, pl); pause_for_enter(); break;
+            case 3: record_bill_payment(bl, pl); pause_for_enter(); break;
+            case 4: view_unsettled_bills(bl, pl); pause_for_enter(); break;
+            case 0: break;
+            default: break;
+        }
+    } while (choice != 0);
+}
+
+static void create_bill(BillList *bl, PatientList *pl, DoctorList *dl, WardList *wl) {
+    Bill b;
+    Patient *p;
+    Doctor *d = NULL;
+    Ward *w = NULL;
+    int days_stayed = 0;
+    double subtotal = 0.0;
+
+    memset(&b, 0, sizeof(Bill));
+    b.id = bl->next_id;
+    b.active = 1;
+
+    print_header("GENERATE PATIENT BILL");
+    if (!read_int_range("Enter Patient ID: ", 1, 999999, &b.patient_id)) {
+        printf("[Error] Invalid ID.\n");
+        return;
     }
-    array_free(&arr);
-}
- 
-static void demo_list(void) {
-    printf("\n== linked list ==\n");
-    Node *head = NULL;
-    for (int i = 1; i <= 6; i++) {
-        head = list_prepend(head, i * i);
+    p = find_patient_by_id(pl, b.patient_id);
+    if (!p) {
+        printf("[Error] Patient ID %d not found.\n", b.patient_id);
+        return;
     }
-    list_print(head);
-    head = list_reverse(head);
-    list_print(head);
-    printf("length: %zu\n", list_length(head));
-    list_free(head);
-}
- 
-static void demo_stack(void) {
-    printf("\n== bracket checker ==\n");
-    const char *samples[] = {
-        "int main() { return (1 + 2) * [3]; }",
-        "if (a[0] { b(); }",
-        "}{",
-    };
-    for (size_t i = 0; i < 3; i++) {
-        printf("%-40s -> %s\n", samples[i], is_balanced(samples[i]) ? "balanced" : "NOT balanced");
+
+    get_current_date(b.billing_date, sizeof(b.billing_date));
+
+    if (p->assigned_doctor_id > 0) {
+        d = find_doctor_by_id(dl, p->assigned_doctor_id);
     }
-}
- 
-static void demo_words(void) {
-    printf("\n== word counts ==\n");
-    const char *text = "the quick brown fox jumps over the lazy dog and the fox runs";
-    HashTable table;
-    table_init(&table);
-    count_words(&table, text);
-    const char *queries[] = {"the", "fox", "dog", "cat"};
-    for (size_t i = 0; i < 4; i++) {
-        printf("%-5s appears %d time(s)\n", queries[i], table_get(&table, queries[i]));
+    if (d) {
+        printf("Assigned Doctor: %s (Default Fee: $%.2f)\n", d->full_name, d->consultation_fee);
+        b.consultation_charge = d->consultation_fee;
     }
-    table_free(&table);
-}
- 
-static void demo_strings(void) {
-    printf("\n== string helpers ==\n");
-    char word[] = "programming";
-    printf("vowels in %s: %d\n", word, count_vowels(word));
-    reverse_string(word);
-    printf("reversed: %s\n", word);
-    const char *phrases[] = {"A man, a plan, a canal: Panama", "Hello, world"};
-    for (size_t i = 0; i < 2; i++) {
-        printf("\"%s\" is %sa palindrome\n", phrases[i], is_palindrome(phrases[i]) ? "" : "not ");
+    if (!read_double_min("Consultation Charge ($): ", 0.0, &b.consultation_charge)) {
+        printf("[Error] Invalid consultation charge.\n");
+        return;
     }
-}
- 
-static void demo_math(void) {
-    printf("\n== math helpers ==\n");
-    printf("gcd(84, 36) = %lu\n", gcd(84, 36));
-    printf("fibonacci(40) = %llu\n", fibonacci(40));
-    print_primes(50);
-}
- 
-static void demo_matrix(void) {
-    printf("\n== matrix multiply ==\n");
-    int a[N][N] = {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}};
-    int b[N][N] = {{9, 8, 7}, {6, 5, 4}, {3, 2, 1}};
-    int result[N][N];
-    matrix_multiply(a, b, result);
-    matrix_print(result);
-}
- 
-static void demo_students(void) {
-    printf("\n== student records ==\n");
-    Student roster[] = {
-        {"Amina", 20, 88.5},
-        {"Brian", 22, 76.0},
-        {"Chloe", 21, 92.3},
-        {"Daniel", 19, 76.0},
-        {"Esther", 23, 81.7},
-    };
-    size_t count = sizeof(roster) / sizeof(roster[0]);
-    qsort(roster, count, sizeof(Student), compare_by_grade);
-    for (size_t i = 0; i < count; i++) {
-        printf("%zu. %-8s age %d grade %.1f\n", i + 1, roster[i].name, roster[i].age, roster[i].grade);
+
+    if (p->assigned_ward_id > 0) {
+        w = find_ward_by_id(wl, p->assigned_ward_id);
     }
-    printf("average grade: %.2f\n", average_grade(roster, count));
-    if (save_students("students.csv", roster, count)) {
-        printf("saved students.csv\n");
+    if (w && read_int_range("Number of Ward Days to Bill: ", 0, 365, &days_stayed)) {
+        b.room_charge = days_stayed * w->daily_rate;
+        printf("Calculated Ward Charge (%d days @ $%.2f): $%.2f\n",
+               days_stayed, w->daily_rate, b.room_charge);
+    } else if (!read_double_min("Room / Ward Charge ($): ", 0.0, &b.room_charge)) {
+        printf("[Error] Invalid room charge.\n");
+        return;
+    }
+
+    if (!read_double_min("Medication Charge ($): ", 0.0, &b.medication_charge) ||
+        !read_double_min("Laboratory / Diagnostics Charge ($): ", 0.0, &b.lab_charge) ||
+        !read_double_min("Discount / Insurance Waiver ($): ", 0.0, &b.discount_amount)) {
+        printf("[Error] Invalid charge amount.\n");
+        return;
+    }
+
+    subtotal = b.consultation_charge + b.room_charge + b.medication_charge + b.lab_charge;
+    if (b.discount_amount > subtotal) {
+        b.discount_amount = subtotal;
+    }
+    b.total_amount = subtotal - b.discount_amount;
+
+    if (!read_double_min("Initial Payment Received Today ($): ", 0.0, &b.amount_paid)) {
+        printf("[Error] Invalid payment amount.\n");
+        return;
+    }
+    if (b.amount_paid > b.total_amount) {
+        b.amount_paid = b.total_amount;
+    }
+    b.is_settled = (b.amount_paid >= b.total_amount - 0.005) ? 1 : 0;
+
+    if (!ensure_bill_capacity(bl)) {
+        printf("[Error] Memory allocation failed.\n");
+        return;
+    }
+    bl->items[bl->count++] = b;
+    bl->next_id++;
+
+    printf("\nBill #%d created for %s (Total: $%.2f | Paid: $%.2f | Balance: $%.2f)\n",
+           b.id, p->full_name, b.total_amount, b.amount_paid, b.total_amount - b.amount_paid);
+}
+
+static void list_bills(const BillList *bl, const PatientList *pl) {
+    size_t count = 0;
+    double grand_total = 0.0;
+    double grand_paid = 0.0;
+
+    print_header("ALL PATIENT BILLS");
+    for (size_t i = 0; i < bl->count; i++) {
+        const Bill *b = &bl->items[i];
+        const Patient *p;
+        double balance;
+        if (!b->active) continue;
+        p = find_patient_by_id((PatientList *)pl, b->patient_id);
+        balance = b->total_amount - b->amount_paid;
+        grand_total += b->total_amount;
+        grand_paid += b->amount_paid;
+
+        printf("Bill #%-5d | Date: %s | Patient: %-20s (ID %d)\n",
+               b->id, b->billing_date, p ? p->full_name : "Unknown", b->patient_id);
+        printf("   Consult: $%.2f | Room: $%.2f | Meds: $%.2f | Lab: $%.2f | Disc: -$%.2f\n",
+               b->consultation_charge, b->room_charge, b->medication_charge, b->lab_charge, b->discount_amount);
+        printf("   Total: $%.2f | Paid: $%.2f | Balance: $%.2f | Status: %s\n",
+               b->total_amount, b->amount_paid, balance > 0.0 ? balance : 0.0,
+               b->is_settled ? "SETTLED" : "DUE");
+        print_separator('-', 52);
+        count++;
+    }
+    if (count == 0) {
+        printf("No bills generated yet.\n");
     } else {
-        printf("could not write students.csv\n");
+        printf("Bills: %zu | Total Billed: $%.2f | Collected: $%.2f | Outstanding: $%.2f\n",
+               count, grand_total, grand_paid, grand_total - grand_paid);
     }
 }
- 
-int main(void) {
-    demo_sorting();
-    demo_list();
-    demo_stack();
-    demo_words();
-    demo_strings();
-    demo_math();
-    demo_matrix();
-    demo_students();
-    printf("\nAll demos finished.\n");
-    return 0;
+
+static void record_bill_payment(BillList *bl, const PatientList *pl) {
+    int bill_id = 0;
+    double payment = 0.0;
+    double balance = 0.0;
+    Bill *b;
+    const Patient *p;
+
+    print_header("RECORD BILL PAYMENT");
+    if (!read_int_range("Enter Bill ID: ", 1, 999999, &bill_id)) {
+        printf("[Error] Invalid ID.\n");
+        return;
+    }
+    b = find_bill_by_id(bl, bill_id);
+    if (!b) {
+        printf("[Error] Bill #%d not found.\n", bill_id);
+        return;
+    }
+    balance = b->total_amount - b->amount_paid;
+    if (b->is_settled || balance <= 0.005) {
+        printf("[Info] Bill #%d is already settled.\n", b->id);
+        return;
+    }
+
+    p = find_patient_by_id((PatientList *)pl, b->patient_id);
+    printf("Patient: %s | Total: $%.2f | Paid: $%.2f | Remaining Balance: $%.2f\n",
+           p ? p->full_name : "Unknown", b->total_amount, b->amount_paid, balance);
+
+    if (!read_double_min("Payment Amount ($): ", 0.01, &payment)) {
+        printf("[Error] Invalid payment amount.\n");
+        return;
+    }
+    if (payment > balance) {
+        printf("[Warning] Payment exceeds balance; capping at $%.2f.\n", balance);
+        payment = balance;
+    }
+
+    b->amount_paid += payment;
+    if (b->amount_paid >= b->total_amount - 0.005) {
+        b->amount_paid = b->total_amount;
+        b->is_settled = 1;
+    }
+    printf("[Success] Payment recorded. New balance: $%.2f (%s)\n",
+           b->total_amount - b->amount_paid, b->is_settled ? "SETTLED" : "DUE");
+}
+
+static void view_unsettled_bills(const BillList *bl, const PatientList *pl) {
+    size_t count = 0;
+    double total_due = 0.0;
+
+    print_header("UNSETTLED BILLS");
+    for (size_t i = 0; i < bl->count; i++) {
+        const Bill *b = &bl->items[i];
+        const Patient *p;
+        double balance;
+        if (!b->active || b->is_settled) continue;
+        balance = b->total_amount - b->amount_paid;
+        if (balance <= 0.005) continue;
+        p = find_patient_by_id((PatientList *)pl, b->patient_id);
+        printf("  Bill #%-5d | %-20s (ID %d) | Balance Due: $%.2f\n",
+               b->id, p ? p->full_name : "Unknown", b->patient_id, balance);
+        total_due += balance;
+        count++;
+    }
+    printf("Unsettled Bills: %zu | Total Amount Due: $%.2f\n", count, total_due);
+}
+
+/* =========================================================================
+ * REPORTS & ANALYTICS
+ * ========================================================================= */
+
+static void reports_menu(const PatientList *pl, const DoctorList *dl, const AppointmentList *al, const WardList *wl, const BillList *bl) {
+    int choice = 0;
+    do {
+        print_header("REPORTS & ANALYTICS");
+        printf("  1. View Hospital Summary Dashboard\n");
+        printf("  2. Export Summary Report to Text File (%s)\n", FILE_REPORT_TXT);
+        printf("  0. Back to Main Menu\n");
+        print_separator('-', 52);
+
+        if (!read_int_range("Select option: ", 0, 2, &choice)) {
+            printf("[Error] Enter a valid option (0-2).\n");
+            continue;
+        }
+
+        switch (choice) {
+            case 1:
+                print_hospital_dashboard(pl, dl, al, wl, bl);
+                pause_for_enter();
+                break;
+            case 2:
+                export_summary_report(pl, dl, al, wl, bl, FILE_REPORT_TXT);
+                pause_for_enter();
+                break;
+            case 0:
+                break;
+            default:
+                break;
+        }
+    } while (choice != 0);
+}
+
+static void print_hospital_dashboard(const PatientList *pl, const DoctorList *dl, const AppointmentList *al, const WardList *wl, const BillList *bl) {
+    int outpatients = 0, inpatients = 0, discharged = 0;
+    int avail_docs = 0, total_docs = 0;
+    int sched_appts = 0, comp_appts = 0, canc_appts = 0;
+    int total_beds = 0, occ_beds = 0;
+    double billed = 0.0, collected = 0.0;
+
+    for (size_t i = 0; i < pl->count; i++) {
+        if (!pl->items[i].active) continue;
+        if (pl->items[i].status == PATIENT_OUTPATIENT) outpatients++;
+        else if (pl->items[i].status == PATIENT_INPATIENT) inpatients++;
+        else if (pl->items[i].status == PATIENT_DISCHARGED) discharged++;
+    }
+
+    for (size_t i = 0; i < dl->count; i++) {
+        if (!dl->items[i].active) continue;
+        total_docs++;
+        if (dl->items[i].available) avail_docs++;
+    }
+
+    for (size_t i = 0; i < al->count; i++) {
+        if (!al->items[i].active) continue;
+        if (al->items[i].status == APPT_SCHEDULED) sched_appts++;
+        else if (al->items[i].status == APPT_COMPLETED) comp_appts++;
+        else if (al->items[i].status == APPT_CANCELLED) canc_appts++;
+    }
+
+    for (size_t i = 0; i < wl->count; i++) {
+        if (!wl->items[i].active) continue;
+        total_beds += wl->items[i].total_beds;
+        occ_beds += wl->items[i].occupied_beds;
+    }
+
+    for (size_t i = 0; i < bl->count; i++) {
+        if (!bl->items[i].active) continue;
+        billed += bl->items[i].total_amount;
+        collected += bl->items[i].amount_paid;
+    }
+
+    print_header("HOSPITAL SUMMARY DASHBOARD");
+    printf("Patients      : %d Total (%d Inpatient, %d Outpatient, %d Discharged)\n",
+           outpatients + inpatients + discharged, inpatients, outpatients, discharged);
+    printf("Doctors       : %d Total (%d Available)\n", total_docs, avail_docs);
+    printf("Appointments  : %d Scheduled, %d Completed, %d Cancelled\n",
+           sched_appts, comp_appts, canc_appts);
+    printf("Bed Occupancy : %d / %d beds occupied (%.1f%%)\n",
+           occ_beds, total_beds,
+           (total_beds > 0) ? (100.0 * (double)occ_beds / (double)total_beds) : 0.0);
+    printf("Financials    : Billed $%.2f | Collected $%.2f | Outstanding $%.2f\n",
+           billed, collected, billed - collected);
+}
+
+static void export_summary_report(const PatientList *pl, const DoctorList *dl, const AppointmentList *al, const WardList *wl, const BillList *bl, const char *filename) {
+    FILE *fp = fopen(filename, "w");
+    char today[MAX_DATE_LEN];
+    double billed = 0.0;
+    double collected = 0.0;
+
+    if (!fp) {
+        printf("[Error] Could not create report file '%s'.\n", filename);
+        return;
+    }
+
+    get_current_date(today, sizeof(today));
+    fprintf(fp, "========================================================\n");
+    fprintf(fp, "HOSPITAL MANAGEMENT SYSTEM - SUMMARY REPORT (%s)\n", today);
+    fprintf(fp, "========================================================\n\n");
+
+    fprintf(fp, "--- PATIENTS (%zu records) ---\n", pl->count);
+    for (size_t i = 0; i < pl->count; i++) {
+        if (pl->items[i].active) {
+            fprintf(fp, "ID: %d | Name: %s | Status: %s | Dx: %s\n",
+                    pl->items[i].id, pl->items[i].full_name,
+                    patient_status_str(pl->items[i].status), pl->items[i].diagnosis);
+        }
+    }
+
+    fprintf(fp, "\n--- DOCTORS (%zu records) ---\n", dl->count);
+    for (size_t i = 0; i < dl->count; i++) {
+        if (dl->items[i].active) {
+            fprintf(fp, "ID: %d | Name: %s | Spec: %s | Fee: $%.2f | %s\n",
+                    dl->items[i].id, dl->items[i].full_name, dl->items[i].specialization,
+                    dl->items[i].consultation_fee, dl->items[i].available ? "Available" : "Unavailable");
+        }
+    }
+
+    fprintf(fp, "\n--- WARDS (%zu records) ---\n", wl->count);
+    for (size_t i = 0; i < wl->count; i++) {
+        if (wl->items[i].active) {
+            fprintf(fp, "Ward %d (%s): %d/%d occupied | $%.2f/day\n",
+                    wl->items[i].ward_id, wl->items[i].ward_name,
+                    wl->items[i].occupied_beds, wl->items[i].total_beds, wl->items[i].daily_rate);
+        }
+    }
+
+    fprintf(fp, "\n--- APPOINTMENTS (%zu records) ---\n", al->count);
+    for (size_t i = 0; i < al->count; i++) {
+        if (al->items[i].active) {
+            fprintf(fp, "Appt #%d | %s %s | Patient ID: %d | Doctor ID: %d | %s\n",
+                    al->items[i].id, al->items[i].date, al->items[i].time_slot,
+                    al->items[i].patient_id, al->items[i].doctor_id,
+                    appointment_status_str(al->items[i].status));
+        }
+    }
+
+    fprintf(fp, "\n--- BILLING (%zu records) ---\n", bl->count);
+    for (size_t i = 0; i < bl->count; i++) {
+        if (bl->items[i].active) {
+            billed += bl->items[i].total_amount;
+            collected += bl->items[i].amount_paid;
+            fprintf(fp, "Bill #%d | Patient ID: %d | Total: $%.2f | Paid: $%.2f | %s\n",
+                    bl->items[i].id, bl->items[i].patient_id,
+                    bl->items[i].total_amount, bl->items[i].amount_paid,
+                    bl->items[i].is_settled ? "SETTLED" : "DUE");
+        }
+    }
+    fprintf(fp, "\nTotal Billed: $%.2f | Total Collected: $%.2f | Outstanding: $%.2f\n",
+            billed, collected, billed - collected);
+
+    fclose(fp);
+    printf("[Success] Summary report exported to '%s'.\n", filename);
 }
